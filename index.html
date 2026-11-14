@@ -73,12 +73,33 @@
     #roughDialog input[type=range] { width:110px; }
     #roughDialog input[type=checkbox] { width:19px; height:19px; accent-color:#64dece; }
     #roughDialog .actions { display:flex; justify-content:flex-end; gap:8px; margin-top:9px; }
+    #aiCreateDialog, #aiCreatePreviewDialog {
+      background:#1e2133;color:#f8f8ff;border:1px solid #8d7de0;border-radius:17px;
+      padding:16px;box-shadow:0 12px 45px #000a;
+    }
+    #aiCreateDialog { width:min(94vw,610px);max-height:88dvh;overflow-y:auto; }
+    #aiCreateDialog::backdrop { background:#050512b9; }
+    #aiCreateDialog h2,#aiCreatePreviewDialog h2 { margin:0 0 8px;font-size:18px; }
+    #aiCreateDialog p,#aiCreatePreviewDialog p {color:#d1d5e6;font-size:13px;line-height:1.5; }
+    #aiCreateText {
+      width:100%;height:min(44dvh,355px);min-height:150px;resize:vertical;
+      border-radius:11px;border:1px solid #77799f;background:#111422;color:#fff;
+      padding:11px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;
+    }
+    #aiCreateDialog .actions,#aiCreatePreviewDialog .actions {
+      display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px;
+    }
+    #aiCreatePreviewDialog {
+      position:fixed;top:auto;bottom:calc(env(safe-area-inset-bottom) + 10px);
+      margin:0 auto;width:min(95vw,560px);max-height:48dvh;overflow-y:auto;
+    }
+    #aiCreatePreviewDialog::backdrop {background:transparent;}
     @media (max-width:390px) { header h1 { font-size:15px }; .line button { padding:7px 10px } }
   </style>
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.7.0</small></h1><small>指描きからベジェに変換</small></div>
+    <div><h1>✦ YubiSVG <small>v0.8.0</small></h1><small>AIで新規SVGパーツ生成</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -93,6 +114,7 @@
     <button data-tool="pan">✥ 移動</button>
     <button data-tool="reference" id="refMoveTool">🖼 下絵移動</button>
     <button id="aiCopyBtn" class="primary">✦ AIに送る</button>
+    <button id="aiCreateBtn" class="primary">✦ AI新規作成</button>
     <button id="aiPasteBtn">⇥ AI修正を貼る</button>
     <button id="undoBtn">↶ 戻す</button>
     <button id="redoBtn">↷ やり直す</button>
@@ -146,6 +168,27 @@
       <button id="roughConfirm" class="primary">✓ 確定</button>
     </div>
   </dialog>
+  <dialog id="aiCreateDialog" aria-label="ChatGPTで新規SVGパーツを作る">
+    <h2>✦ ChatGPTで新規パーツ作成</h2>
+    <p id="aiCreateHelp" role="status">依頼文をコピーしてChatGPTへ送ってください。JSONを受け取ったら、この画面の「生成JSONを貼る」へ。</p>
+    <textarea id="aiCreateText" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="AI新規生成の文章またはJSON"></textarea>
+    <div class="actions">
+      <button id="aiCreateCloseBtn">閉じる</button>
+      <button id="aiCreateBackBtn" hidden>← 依頼文へ</button>
+      <button id="aiCreateCopyBtn" class="primary">依頼文をコピー</button>
+      <button id="aiCreatePasteModeBtn">⇥ 生成JSONを貼る</button>
+      <button id="aiCreatePreviewBtn" class="primary" hidden>👁 プレビューを確認</button>
+    </div>
+  </dialog>
+  <dialog id="aiCreatePreviewDialog" aria-label="AI新規パーツの追加プレビュー">
+    <h2>👁 新規パーツのプレビュー</h2>
+    <p>水色の輪郭が追加候補です。確定前は保存やSVG書き出しに含まれず、既存パーツは変更されません。</p>
+    <p id="aiCreatePreviewSummary" role="status"></p>
+    <div class="actions">
+      <button id="aiCreateDiscardBtn">✕ 破棄</button>
+      <button id="aiCreateConfirmBtn" class="primary">✓ このパーツを追加</button>
+    </div>
+  </dialog>
   <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
     <h2 id="aiTitle">AIとパーツを編集</h2>
     <p id="aiHelp"></p>
@@ -170,11 +213,12 @@
       <button id="refShareCloseBtn">閉じる</button>
     </div>
   </dialog>
-<script src="./client/rough-to-bezier.js?v=0.7.0"></script>
-<script src="./client/ai-patch-core.js?v=0.7.0"></script>
-<script src="./client/reference-store.js?v=0.7.0"></script>
-<script src="./client/reference-share.js?v=0.7.0"></script>
-<script src="./client/sync-client.js?v=0.7.0"></script>
+<script src="./client/ai-create-core.js?v=0.8.0"></script>
+<script src="./client/rough-to-bezier.js?v=0.8.0"></script>
+<script src="./client/ai-patch-core.js?v=0.8.0"></script>
+<script src="./client/reference-store.js?v=0.8.0"></script>
+<script src="./client/reference-share.js?v=0.8.0"></script>
+<script src="./client/sync-client.js?v=0.8.0"></script>
 <script>
 (() => {
   'use strict';
@@ -231,6 +275,7 @@
   const undo=[],redo=[];
   let sync=null;
   let roughPreview=null;
+  let aiNewPreview=null;
   let refImageData=null,refImageId=null,refLoadingCounter=0;
   const status = message => { $('status').textContent=message; };
   const selected=()=>doc.elements.find(e=>e.id===selection);
@@ -317,7 +362,8 @@
   const vectorLayer=makeEl('g',{'data-vector-layer':'true'});
   // Preview is an isolated SVG layer, never part of the document/export.
   const roughPreviewLayer=makeEl('g',{'pointer-events':'none','data-rough-preview':'true'});
-  canvas.replaceChildren(backgroundNode,vectorLayer,roughPreviewLayer);
+  const aiNewPreviewLayer=makeEl('g',{'pointer-events':'none','data-ai-new-preview':'true'});
+  canvas.replaceChildren(backgroundNode,vectorLayer,roughPreviewLayer,aiNewPreviewLayer);
   let referenceNodeSource=null;
   function updateReferenceNode() {
     const ref=doc.reference;
@@ -388,6 +434,21 @@
         'stroke-linejoin':'round','stroke-linecap':'round'});
       roughPreviewLayer.replaceChildren(halo,preview);
     } else roughPreviewLayer.replaceChildren();
+    if(aiNewPreview?.elements) {
+      const nodes=document.createDocumentFragment();
+      for(const candidate of aiNewPreview.elements) {
+        const d=pathData(candidate);
+        // Cyan contour makes even very light or fill-only proposals visible.
+        nodes.appendChild(makeEl('path',{d,fill:'none',stroke:'#ffffff',
+          'stroke-width':Math.max(5,candidate.style.strokeWidth+6),opacity:0.9,
+          'stroke-linejoin':'round','stroke-linecap':'round'}));
+        nodes.appendChild(makeEl('path',{d,
+          fill:candidate.closed?candidate.style.fill:'none','fill-opacity':0.35,
+          stroke:'#00bfae','stroke-width':Math.max(3,candidate.style.strokeWidth+1),
+          'stroke-linejoin':'round','stroke-linecap':'round'}));
+      }
+      aiNewPreviewLayer.replaceChildren(nodes);
+    } else aiNewPreviewLayer.replaceChildren();
     const activeReference=Boolean(doc.reference);
     $('refOpacity').disabled=!activeReference;
     $('refScale').disabled=!activeReference;
@@ -897,6 +958,97 @@
     shareStatus('画像の保存を開始したよ。ChatGPTの「＋」からこの画像を添付してね。');
   };
 
+  // ChatGPT handoff for newly generated elements. It shares only the
+  // document summary (never image bytes); the user shares the reference
+  // image separately when they want ChatGPT to see it.
+  const aiCreateDialog=$('aiCreateDialog');
+  const aiCreateText=$('aiCreateText');
+  const aiCreatePreviewDialog=$('aiCreatePreviewDialog');
+  let aiCreateMode='prompt';
+  function switchAICreateMode(mode) {
+    aiCreateMode=mode;
+    const pasting=mode==='paste';
+    $('aiCreateCopyBtn').hidden=pasting;
+    $('aiCreatePasteModeBtn').hidden=pasting;
+    $('aiCreatePreviewBtn').hidden=!pasting;
+    $('aiCreateBackBtn').hidden=!pasting;
+    $('aiCreateHelp').textContent=pasting
+      ? 'ChatGPTから届いたcreateElement/createElementsのJSONを貼り付けてください。検証後にキャンバスで確認できます。'
+      : 'この依頼文をChatGPTに貼り付けて追加したい図形を伝えてください。画像を使う場合は下絵も別途添付してください。';
+    aiCreateText.value=pasting?'':window.YubiAICreate.createHandoff(doc);
+  }
+  $('aiCreateBtn').onclick=()=>{
+    if(!window.YubiAICreate?.createHandoff){
+      status('新規パーツ生成の機能を読み込めませんでした。ページを再読み込みしてください');return;
+    }
+    try{switchAICreateMode('prompt');aiCreateDialog.showModal();}
+    catch(error){status('依頼文を作れません：'+error.message);}
+  };
+  $('aiCreateCloseBtn').onclick=()=>aiCreateDialog.close();
+  $('aiCreateBackBtn').onclick=()=>switchAICreateMode('prompt');
+  $('aiCreatePasteModeBtn').onclick=()=>switchAICreateMode('paste');
+  $('aiCreateCopyBtn').onclick=async()=>{
+    if(aiCreateMode!=='prompt')return;
+    try{
+      await navigator.clipboard.writeText(aiCreateText.value);
+      aiCreateDialog.close();
+      status('新規パーツ生成の依頼文をコピーしました！ ChatGPTへ貼り付けてね');
+    }catch{
+      aiCreateText.focus();aiCreateText.select();
+      status('文章を選択しました。手動でコピーしてChatGPTに貼り付けてね');
+    }
+  };
+  $('aiCreatePreviewBtn').onclick=()=>{
+    if(aiCreateMode!=='paste')return;
+    try {
+      const proposal=window.YubiAICreate.buildProposal(doc,aiCreateText.value);
+      aiNewPreview=proposal;
+      $('aiCreatePreviewSummary').textContent=proposal.elements.length
+        +'個の追加候補：'+proposal.elements.map(e=>e.name).join(' / ');
+      aiCreateDialog.close();
+      aiCreatePreviewDialog.showModal();
+      render();
+      status('AIの新規パーツをプレビュー中（まだ保存していません）');
+    }catch(error){
+      const message='JSONを確認できません：'+error.message;
+      $('aiCreateHelp').textContent=message;
+      status(message);
+    }
+  };
+  $('aiCreateDiscardBtn').onclick=()=>{
+    aiNewPreview=null;
+    aiCreatePreviewDialog.close();
+    render();
+    status('新規パーツの追加を破棄しました。元の作品はそのままです');
+  };
+  aiCreatePreviewDialog.addEventListener('close',()=>{
+    if(aiNewPreview){aiNewPreview=null;render();}
+  });
+  $('aiCreateConfirmBtn').onclick=()=>{
+    if(!aiNewPreview)return;
+    const p=aiNewPreview;
+    if(doc.documentId!==p.documentId||doc.revision!==p.expectedRevision
+      ||doc.elements.length+p.elements.length>1500){
+      aiNewPreview=null;aiCreatePreviewDialog.close();render();
+      status('作品がプレビュー中に変わりました。新規JSONを作り直してください');return;
+    }
+    const before=snapshot(),existingIds=new Set(doc.elements.map(e=>e.id));
+    const newItems=p.elements.map(candidate=>{
+      let newId=uid();
+      while(existingIds.has(newId))newId=uid();
+      existingIds.add(newId);
+      return {...copy(candidate),id:newId,locked:false};
+    });
+    // Only append new elements. Existing object identities, IDs and layers
+    // are untouched, and the entire batch is one undoable commit.
+    doc.elements.push(...newItems);
+    selection=newItems.at(-1).id;
+    activeBezier=null;tool='select';
+    aiNewPreview=null;aiCreatePreviewDialog.close();
+    commit(before);
+    status(newItems.length+'個のAIパーツを追加しました！ Undoでまとめて戻せます');
+  };
+
   // Phone-only AI handoff: ChatGPT returns an exact one-element JSON patch.
   // No account token, third-party server, or uploaded artwork is required.
   const aiDialog=$('aiDialog'),aiText=$('aiText'),aiPartSelect=$('aiPartSelect');
@@ -1012,10 +1164,10 @@
   // confirmation, and incoming events never interrupt a brush gesture.
   sync=window.YubiSync?.createController({
     getDoc:()=>copy(doc),
-    isBusy:()=>Boolean(gesture||pinch||pointers.size),
+    isBusy:()=>Boolean(gesture||pinch||pointers.size||roughPreview||aiNewPreview||aiCreateDialog.open),
     status,
     replaceDoc:remote=>{
-      if(gesture||pinch||pointers.size||!valid(remote))return false;
+      if(gesture||pinch||pointers.size||roughPreview||aiNewPreview||aiCreateDialog.open||!valid(remote))return false;
       doc=copy(remote);
       selection=doc.elements[0]?.id||null;
       activeBezier=null;
