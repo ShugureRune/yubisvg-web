@@ -52,13 +52,22 @@
     #aiText { width:100%; height:min(45dvh,370px); min-height:160px; border-radius:12px;
       border:1px solid #77799f; background:#111422; color:#f0efff; padding:12px;
       font:12px ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; }
-    #aiDialog .actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; margin-top:10px }
+    #aiDialog .actions, #refShareDialog .actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; margin-top:10px }
+    #refShareDialog { width:min(94vw,540px);max-height:88dvh;overflow-y:auto;
+      background:#1e2133;color:#f8f8ff;border:1px solid #7970c5;border-radius:18px;
+      padding:18px;box-shadow:0 10px 80px #000b }
+    #refShareDialog::backdrop { background:#050512b9 }
+    #refShareDialog h2 {font-size:18px;margin:0 0 8px}
+    #refShareDialog p {font-size:13px;color:#c8ccdf;line-height:1.5}
+    #refSharePreview {display:block;max-width:100%;max-height:30dvh;object-fit:contain;
+      margin:12px auto;border-radius:10px;background:#fff}
+    #refShareStatus {font-weight:600;min-height:1.8em}
     @media (max-width:390px) { header h1 { font-size:15px }; .line button { padding:7px 10px } }
   </style>
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.5</small></h1><small>スマホで下絵トレース＆AI編集</small></div>
+    <div><h1>✦ YubiSVG <small>v0.6</small></h1><small>スマホで下絵共有＆AI編集</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -90,6 +99,7 @@
   </div>
   <div class="line" id="refOptions" aria-label="下絵の操作">
     <button id="refAddBtn" class="primary">🖼 下絵読み込み</button>
+    <button id="refShareBtn">✦ 下絵をChatGPTに渡す</button>
     <label>透明度 <input id="refOpacity" type="range" min="0" max="100" value="45" aria-label="下絵の透明度"><span class="value" id="refOpacityValue">45%</span></label>
     <label>サイズ <input id="refScale" type="range" min="25" max="300" value="100" step="5" aria-label="下絵のサイズ"><span class="value" id="refScaleValue">100%</span></label>
     <button id="refVisibilityBtn">下絵を隠す</button>
@@ -122,9 +132,23 @@
       <button id="aiApplyBtn" class="primary" hidden>修正を確認</button>
     </div>
   </dialog>
-<script src="./client/ai-patch-core.js?v=0.5"></script>
-<script src="./client/reference-store.js?v=0.5"></script>
-<script src="./client/sync-client.js?v=0.5"></script>
+  <dialog id="refShareDialog" aria-label="下絵画像をChatGPTに渡す">
+    <h2>🖼 下絵をChatGPTに渡す</h2>
+    <p>画像は自動では送られません。自分で共有先を選ぶか、保存してこのチャットに添付できます。</p>
+    <img id="refSharePreview" alt="共有する下絵画像のプレビュー" hidden>
+    <p id="refShareStatus" role="status">下絵を準備中…</p>
+    <p>共有メニューにChatGPTがなければ「画像を保存」→ ChatGPTの「＋」から画像を添付してね。画像のあとに「AIに送る」でパーツ情報も渡すと、下絵と座標を見比べられます。</p>
+    <div class="actions">
+      <button id="refShareNativeBtn" class="primary" disabled>共有メニュー</button>
+      <button id="refShareCopyBtn" disabled>画像をコピー</button>
+      <button id="refShareSaveBtn" disabled>画像を保存</button>
+      <button id="refShareCloseBtn">閉じる</button>
+    </div>
+  </dialog>
+<script src="./client/ai-patch-core.js?v=0.6"></script>
+<script src="./client/reference-store.js?v=0.6"></script>
+<script src="./client/reference-share.js?v=0.6"></script>
+<script src="./client/sync-client.js?v=0.6"></script>
 <script>
 (() => {
   'use strict';
@@ -303,6 +327,7 @@
     $('refVisibilityBtn').disabled=!activeReference;
     $('refCenterBtn').disabled=!activeReference;
     $('refRemoveBtn').disabled=!activeReference;
+    $('refShareBtn').disabled=!activeReference;
     if(activeReference) {
       $('refOpacity').value=Math.round(doc.reference.opacity*100);
       $('refOpacityValue').textContent=Math.round(doc.reference.opacity*100)+'%';
@@ -521,7 +546,8 @@
     void loadReferenceForDocument();
   };
   function download(filename,text,mime){
-    const blob=new Blob([text],{type:mime}),url=URL.createObjectURL(blob);
+    const blob=text instanceof Blob?text:new Blob([text],{type:mime});
+    const url=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=url;a.download=filename;
     document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),15000);
@@ -641,6 +667,91 @@
     commit(before);
     void loadReferenceForDocument();
     status('下絵を削除しました。描いたSVGは残っています');
+  };
+
+  // Explicit, private handoff: prepare the PNG while the dialog is open,
+  // then share/copy/download only from a separate user-initiated button tap.
+  // The share sheet is not guaranteed to list ChatGPT on every iPhone.
+  const refShareDialog=$('refShareDialog');
+  let refShareFile=null,refShareGeneration=0;
+  const shareStatus=message=>{$('refShareStatus').textContent=message;};
+  function resetShareButtons() {
+    $('refShareNativeBtn').disabled=true;
+    $('refShareCopyBtn').disabled=true;
+    $('refShareSaveBtn').disabled=true;
+  }
+  $('refShareCloseBtn').onclick=()=>refShareDialog.close();
+  refShareDialog.addEventListener('close',()=>{
+    ++refShareGeneration;
+    refShareFile=null;
+    $('refSharePreview').removeAttribute('src');
+    $('refSharePreview').hidden=true;
+    resetShareButtons();
+  });
+  $('refShareBtn').onclick=()=>{
+    const id=doc.reference?.id;
+    if(!id) {status('先に「下絵読み込み」で画像を選択してね');return;}
+    ++refShareGeneration;
+    const generation=refShareGeneration;
+    refShareFile=null;resetShareButtons();
+    $('refSharePreview').hidden=true;
+    shareStatus('下絵を共有用PNGに準備中…');
+    refShareDialog.showModal();
+    void (async()=>{
+      try {
+        const data=(refImageId===id&&refImageData)
+          ?refImageData:await window.YubiReference.load(id);
+        if(generation!==refShareGeneration||doc.reference?.id!==id)return;
+        if(!data)throw new Error('下絵がこの端末にありません。画像をもう一度読み込んでください');
+        const imageFile=await window.YubiShare.prepareFile(data);
+        if(generation!==refShareGeneration||doc.reference?.id!==id)return;
+        refShareFile=imageFile;
+        $('refSharePreview').src=data;
+        $('refSharePreview').hidden=false;
+        let shareAvailable=typeof navigator.share==='function';
+        if(shareAvailable&&typeof navigator.canShare==='function'){
+          try {shareAvailable=Boolean(navigator.canShare({files:[imageFile]}));}
+          catch {shareAvailable=false;}
+        }
+        $('refShareNativeBtn').disabled=!shareAvailable;
+        $('refShareCopyBtn').disabled=!(navigator.clipboard?.write&&window.ClipboardItem);
+        $('refShareSaveBtn').disabled=false;
+        shareStatus('画像を準備できた！ 共有方法を選んでね。');
+      }catch(error){
+        if(generation!==refShareGeneration)return;
+        shareStatus('画像を準備できません：'+error.message);
+        status('下絵共有エラー：'+error.message);
+      }
+    })();
+  };
+  $('refShareNativeBtn').onclick=()=>{
+    const file=refShareFile;
+    if(!file||typeof navigator.share!=='function')return;
+    try {
+      // Keep navigator.share synchronous to this click for Safari's
+      // transient user activation requirement.
+      Promise.resolve(navigator.share({files:[file],title:'YubiSVGの下絵'}))
+        .then(()=>shareStatus('共有メニューを閉じました。ChatGPTに添付されたか確認してね。'))
+        .catch(error=>{
+          if(error?.name==='AbortError'){shareStatus('共有をキャンセルしました');return;}
+          shareStatus('共有できません：'+(error?.message||error)+'。「画像を保存」から添付してね。');
+        });
+    }catch(error){shareStatus('共有できません：'+error.message+'。「画像を保存」から添付してね。');}
+  };
+  $('refShareCopyBtn').onclick=()=>{
+    if(!refShareFile||!navigator.clipboard?.write||!window.ClipboardItem)return;
+    try {
+      // The clipboard request also begins synchronously with the tap.
+      Promise.resolve(navigator.clipboard.write([
+        new window.ClipboardItem({'image/png':refShareFile})
+      ])).then(()=>shareStatus('画像をコピーしたよ。ChatGPTに貼り付けてね。貼れない場合は「画像を保存」を使ってね。'))
+        .catch(error=>shareStatus('画像コピーに失敗：'+(error?.message||error)+'。「画像を保存」から添付してね。'));
+    }catch(error){shareStatus('画像をコピーできません：'+error.message+'。「画像を保存」から添付してね。');}
+  };
+  $('refShareSaveBtn').onclick=()=>{
+    if(!refShareFile)return;
+    download(refShareFile.name,refShareFile,refShareFile.type);
+    shareStatus('画像の保存を開始したよ。ChatGPTの「＋」からこの画像を添付してね。');
   };
 
   // Phone-only AI handoff: ChatGPT returns an exact one-element JSON patch.
