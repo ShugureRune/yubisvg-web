@@ -67,7 +67,7 @@
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.6</small></h1><small>スマホで下絵共有＆AI編集</small></div>
+    <div><h1>✦ YubiSVG <small>v0.6.1</small></h1><small>スマホで下絵共有＆AI編集</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -145,10 +145,10 @@
       <button id="refShareCloseBtn">閉じる</button>
     </div>
   </dialog>
-<script src="./client/ai-patch-core.js?v=0.6"></script>
-<script src="./client/reference-store.js?v=0.6"></script>
-<script src="./client/reference-share.js?v=0.6"></script>
-<script src="./client/sync-client.js?v=0.6"></script>
+<script src="./client/ai-patch-core.js?v=0.6.1"></script>
+<script src="./client/reference-store.js?v=0.6.1"></script>
+<script src="./client/reference-share.js?v=0.6.1"></script>
+<script src="./client/sync-client.js?v=0.6.1"></script>
 <script>
 (() => {
   'use strict';
@@ -278,19 +278,48 @@
     if(!m) return {x:0,y:0};
     return p.matrixTransform(m.inverse());
   }
-  function render() {
-    canvas.setAttribute('viewBox',[view.x,view.y,view.w,view.h].join(' '));
-    const fragment=document.createDocumentFragment();
-    fragment.appendChild(makeEl('rect',{x:0,y:0,width:SIZE,height:SIZE,fill:'#fff',stroke:'#dbd6e8','stroke-width':2}));
+  // The static background and raster reference must stay mounted while the
+  // touch editor redraws its vector layer. Recreating <image href=data:...>
+  // on every pointer move can trigger expensive iOS Safari image decoding.
+  const backgroundNode=makeEl('rect',{x:0,y:0,width:SIZE,height:SIZE,fill:'#fff',
+    stroke:'#dbd6e8','stroke-width':2});
+  const referenceNode=makeEl('image',{
+    'pointer-events':'none',preserveAspectRatio:'xMidYMid meet',
+    'data-reference-image':'true'
+  });
+  const vectorLayer=makeEl('g',{'data-vector-layer':'true'});
+  canvas.replaceChildren(backgroundNode,vectorLayer);
+  let referenceNodeSource=null;
+  function updateReferenceNode() {
     const ref=doc.reference;
-    if(ref?.visible && refImageId===ref.id && refImageData) {
-      fragment.appendChild(makeEl('image',{
-        x:ref.x,y:ref.y,width:ref.width,height:ref.height,
-        opacity:ref.opacity,href:refImageData,
-        preserveAspectRatio:'xMidYMid meet','pointer-events':'none',
-        'data-reference-image':'true'
-      }));
+    if(!ref?.visible || refImageId!==ref.id || !refImageData) {
+      if(referenceNode.parentNode)referenceNode.remove();
+      if(!refImageData && referenceNodeSource!==null) {
+        referenceNode.removeAttribute('href');
+        referenceNodeSource=null;
+      }
+      return;
     }
+    // Never set the large data URL again unless the actual bitmap changed.
+    if(referenceNodeSource!==refImageData) {
+      referenceNode.setAttribute('href',refImageData);
+      referenceNodeSource=refImageData;
+    }
+    for(const [key,value] of Object.entries({
+      x:ref.x,y:ref.y,width:ref.width,height:ref.height,opacity:ref.opacity
+    })) {
+      const formatted=String(value);
+      if(referenceNode.getAttribute(key)!==formatted)
+        referenceNode.setAttribute(key,formatted);
+    }
+    if(referenceNode.parentNode!==canvas)
+      canvas.insertBefore(referenceNode,vectorLayer);
+  }
+  function render() {
+    const box=[view.x,view.y,view.w,view.h].join(' ');
+    if(canvas.getAttribute('viewBox')!==box)canvas.setAttribute('viewBox',box);
+    updateReferenceNode();
+    const fragment=document.createDocumentFragment();
     for(const e of doc.elements) {
       const group=makeEl('g',{id:e.id});
       if(e.id===selection) {
@@ -319,7 +348,7 @@
       });
       fragment.appendChild(nodes);
     }
-    canvas.replaceChildren(fragment);
+    vectorLayer.replaceChildren(fragment);
     const activeReference=Boolean(doc.reference);
     $('refOpacity').disabled=!activeReference;
     $('refScale').disabled=!activeReference;
@@ -345,16 +374,20 @@
     $('deleteBtn').disabled=!e||e.locked;
     $('finishBtn').disabled=tool!=='bezier';
     for(const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('active',b.dataset.tool===tool);
-    const list=$('layerList');list.replaceChildren();
-    [...doc.elements].reverse().forEach(item=>{
-      const row=document.createElement('div');row.className='layer-row';
-      const b=document.createElement('button');b.textContent=item.name;b.className=item.id===selection?'selected':'';
-      b.onclick=()=>{selection=item.id;activeBezier=null;tool='select';render();status('選択中：'+item.name);};
-      const lock=document.createElement('button');lock.textContent=item.locked?'🔒':'🔓';
-      lock.setAttribute('aria-label',item.locked?'ロックを解除':'ロックする');
-      lock.onclick=()=>{const before=snapshot();item.locked=!item.locked;commit(before);};
-      row.append(b,lock);list.appendChild(row);
-    });
+    // Avoid rebuilding every layer button on each touch event while the
+    // layer sidebar is closed; this matters for detailed illustrations.
+    if($('layers').classList.contains('open')) {
+      const list=$('layerList');list.replaceChildren();
+      [...doc.elements].reverse().forEach(item=>{
+        const row=document.createElement('div');row.className='layer-row';
+        const b=document.createElement('button');b.textContent=item.name;b.className=item.id===selection?'selected':'';
+        b.onclick=()=>{selection=item.id;activeBezier=null;tool='select';render();status('選択中：'+item.name);};
+        const lock=document.createElement('button');lock.textContent=item.locked?'🔒':'🔓';
+        lock.setAttribute('aria-label',item.locked?'ロックを解除':'ロックする');
+        lock.onclick=()=>{const before=snapshot();item.locked=!item.locked;commit(before);};
+        row.append(b,lock);list.appendChild(row);
+      });
+    }
   }
   function setTool(next) {
     tool=next;
@@ -538,7 +571,7 @@
     const e=selected();if(!e||e.locked)return;
     const before=snapshot();e.style.strokeWidth=strokeWidth;commit(before);
   });
-  $('layersBtn').onclick=()=>$('layers').classList.toggle('open');
+  $('layersBtn').onclick=()=>{const opened=$('layers').classList.toggle('open');if(opened)render();};
   $('closeLayers').onclick=()=>$('layers').classList.remove('open');
   $('newBtn').onclick=()=>{
     if(!confirm('今の絵を消して新規作成しますか？（Undoで戻せます）'))return;
