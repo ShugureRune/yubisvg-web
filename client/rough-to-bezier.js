@@ -34,7 +34,7 @@
   function smooth(points, closed) {
     const n = points.length;
     return points.map((p, i) => {
-      if (!closed && (i === 0 || i === n - 1)) return p.slice();
+      if ((!closed && (i === 0 || i === n - 1)) || sharpCorner(points, i, closed)) return p.slice();
       const before = points[(i + n - 1) % n];
       const after = points[(i + 1) % n];
       return [
@@ -98,7 +98,7 @@
       points.pop();
     }
     const softened = smooth(points, closed);
-    let tolerance = 1.2 + (9 - detail) * 0.95;
+    let tolerance = 0.8 + (9 - detail) * 0.5;
     let fitted = simplify(softened, tolerance);
     for (let i = 0; fitted.length > 500 && i < 12; i++) {
       tolerance *= 1.5;
