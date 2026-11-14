@@ -94,12 +94,33 @@
       margin:0 auto;width:min(95vw,560px);max-height:48dvh;overflow-y:auto;
     }
     #aiCreatePreviewDialog::backdrop {background:transparent;}
+    #aiCompleteDialog, #aiCompletePreviewDialog {
+      background:#1e2133;color:#f8f8ff;border:1px solid #60babb;
+      border-radius:17px;padding:16px;box-shadow:0 12px 45px #000a;
+    }
+    #aiCompleteDialog {width:min(95vw,600px);max-height:86dvh;overflow-y:auto;}
+    #aiCompleteDialog::backdrop {background:#050512b9;}
+    #aiCompleteDialog h2,#aiCompletePreviewDialog h2 {margin:0 0 8px;font-size:18px;}
+    #aiCompleteDialog p,#aiCompletePreviewDialog p {font-size:13px;color:#d1d7e8;line-height:1.5;}
+    #aiCompleteDialog select {min-height:40px;border-radius:10px;padding:6px;
+      background:#111422;border:1px solid #77799f;color:#f0efff;}
+    #aiCompleteText {width:100%;height:min(40dvh,330px);min-height:140px;resize:vertical;
+      border-radius:11px;border:1px solid #77799f;background:#111422;color:#fff;
+      padding:11px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;}
+    #aiCompleteDialog .actions,#aiCompletePreviewDialog .actions {
+      display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px;}
+    #aiCompletePreviewDialog {position:fixed;top:auto;
+      bottom:calc(env(safe-area-inset-bottom) + 10px);margin:0 auto;
+      width:min(95vw,560px);max-height:45dvh;overflow-y:auto;}
+    #aiCompletePreviewDialog::backdrop {background:transparent;}
+    #aiCompleteAxisRow {display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;margin-top:10px;}
+    #aiCompleteAxis {width:min(45vw,190px);accent-color:#64dece;}
     @media (max-width:390px) { header h1 { font-size:15px }; .line button { padding:7px 10px } }
   </style>
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.8.0</small></h1><small>AIで新規SVGパーツ生成</small></div>
+    <div><h1>✦ YubiSVG <small>v0.9.0</small></h1><small>ベジェ続き・隙間・左右反転</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -115,6 +136,7 @@
     <button data-tool="reference" id="refMoveTool">🖼 下絵移動</button>
     <button id="aiCopyBtn" class="primary">✦ AIに送る</button>
     <button id="aiCreateBtn" class="primary">✦ AI新規作成</button>
+    <button id="aiCompleteBtn" class="primary">✦ AI半自動補完</button>
     <button id="aiPasteBtn">⇥ AI修正を貼る</button>
     <button id="undoBtn">↶ 戻す</button>
     <button id="redoBtn">↷ やり直す</button>
@@ -189,6 +211,40 @@
       <button id="aiCreateConfirmBtn" class="primary">✓ このパーツを追加</button>
     </div>
   </dialog>
+  <dialog id="aiCompleteDialog" aria-label="ベジェの続きを生成・隙間を補完・左右反転">
+    <h2>✦ AI半自動補完</h2>
+    <p id="aiCompleteTarget"></p>
+    <label>補完の種類
+      <select id="aiCompleteOperation" aria-label="補完する操作">
+        <option value="extendBezier">✏ ベジェの続きを生成</option>
+        <option value="closeGap">⌒ 開いた輪郭の隙間を補完</option>
+        <option value="mirrorBezier">⇋ 左右反転パーツを追加（AI不要）</option>
+      </select>
+    </label>
+    <label id="aiCompleteAxisRow" hidden>左右対称の軸 X
+      <input id="aiCompleteAxis" type="range" min="0" max="800" step="5" value="400">
+      <span id="aiCompleteAxisValue">400</span>
+    </label>
+    <p id="aiCompleteHelp" role="status"></p>
+    <textarea id="aiCompleteText" aria-label="補完依頼文またはJSON"
+      spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off"></textarea>
+    <div class="actions">
+      <button id="aiCompleteCloseBtn">閉じる</button>
+      <button id="aiCompleteBackBtn" hidden>← 依頼文へ</button>
+      <button id="aiCompleteCopyBtn">依頼文をコピー</button>
+      <button id="aiCompletePasteModeBtn">⇥ 補完JSONを貼る</button>
+      <button id="aiCompletePreviewBtn" class="primary" hidden>👁 プレビュー</button>
+    </div>
+  </dialog>
+  <dialog id="aiCompletePreviewDialog" aria-label="半自動補完のプレビュー">
+    <h2>👁 ベジェ補完プレビュー</h2>
+    <p>水色の輪郭が補完後の候補です。確定するまで元データ・保存・SVG出力は変わりません。</p>
+    <p id="aiCompleteSummary" role="status"></p>
+    <div class="actions">
+      <button id="aiCompleteDiscardBtn">✕ 破棄</button>
+      <button id="aiCompleteConfirmBtn" class="primary">✓ 補完を確定</button>
+    </div>
+  </dialog>
   <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
     <h2 id="aiTitle">AIとパーツを編集</h2>
     <p id="aiHelp"></p>
@@ -213,12 +269,13 @@
       <button id="refShareCloseBtn">閉じる</button>
     </div>
   </dialog>
-<script src="./client/ai-create-core.js?v=0.8.0"></script>
-<script src="./client/rough-to-bezier.js?v=0.8.0"></script>
-<script src="./client/ai-patch-core.js?v=0.8.0"></script>
-<script src="./client/reference-store.js?v=0.8.0"></script>
-<script src="./client/reference-share.js?v=0.8.0"></script>
-<script src="./client/sync-client.js?v=0.8.0"></script>
+<script src="./client/ai-complete-core.js?v=0.9.0"></script>
+<script src="./client/ai-create-core.js?v=0.9.0"></script>
+<script src="./client/rough-to-bezier.js?v=0.9.0"></script>
+<script src="./client/ai-patch-core.js?v=0.9.0"></script>
+<script src="./client/reference-store.js?v=0.9.0"></script>
+<script src="./client/reference-share.js?v=0.9.0"></script>
+<script src="./client/sync-client.js?v=0.9.0"></script>
 <script>
 (() => {
   'use strict';
@@ -276,6 +333,7 @@
   let sync=null;
   let roughPreview=null;
   let aiNewPreview=null;
+  let aiCompletePreview=null;
   let refImageData=null,refImageId=null,refLoadingCounter=0;
   const status = message => { $('status').textContent=message; };
   const selected=()=>doc.elements.find(e=>e.id===selection);
@@ -363,7 +421,8 @@
   // Preview is an isolated SVG layer, never part of the document/export.
   const roughPreviewLayer=makeEl('g',{'pointer-events':'none','data-rough-preview':'true'});
   const aiNewPreviewLayer=makeEl('g',{'pointer-events':'none','data-ai-new-preview':'true'});
-  canvas.replaceChildren(backgroundNode,vectorLayer,roughPreviewLayer,aiNewPreviewLayer);
+  const aiCompletePreviewLayer=makeEl('g',{'pointer-events':'none','data-ai-complete-preview':'true'});
+  canvas.replaceChildren(backgroundNode,vectorLayer,roughPreviewLayer,aiNewPreviewLayer,aiCompletePreviewLayer);
   let referenceNodeSource=null;
   function updateReferenceNode() {
     const ref=doc.reference;
@@ -397,7 +456,7 @@
     const fragment=document.createDocumentFragment();
     for(const e of doc.elements) {
       const group=makeEl('g',{id:e.id});
-      if(e.id===selection && !roughPreview) {
+      if(e.id===selection && !roughPreview && !aiCompletePreview) {
         const outline=makeEl('path',{d:pathData(e),stroke:'#f6b73c','stroke-width':e.style.strokeWidth+9,
           opacity:.55,fill:'none','pointer-events':'none'});
         group.appendChild(outline);
@@ -449,6 +508,18 @@
       }
       aiNewPreviewLayer.replaceChildren(nodes);
     } else aiNewPreviewLayer.replaceChildren();
+    if(aiCompletePreview?.candidate) {
+      const candidate=aiCompletePreview.candidate,d=pathData(candidate);
+      aiCompletePreviewLayer.replaceChildren(
+        makeEl('path',{d,fill:'none',stroke:'#ffffff',opacity:0.9,
+          'stroke-width':Math.max(5,candidate.style.strokeWidth+6),
+          'stroke-linejoin':'round','stroke-linecap':'round'}),
+        makeEl('path',{d,fill:candidate.closed?candidate.style.fill:'none',
+          'fill-opacity':0.35,stroke:'#00bfae',
+          'stroke-width':Math.max(3,candidate.style.strokeWidth+1),
+          'stroke-linejoin':'round','stroke-linecap':'round'})
+      );
+    } else aiCompletePreviewLayer.replaceChildren();
     const activeReference=Boolean(doc.reference);
     $('refOpacity').disabled=!activeReference;
     $('refScale').disabled=!activeReference;
@@ -471,6 +542,7 @@
     $('undoBtn').disabled=!undo.length; $('redoBtn').disabled=!redo.length;
     $('smoothBtn').disabled=!(e?.kind==='bezier')||!!e?.locked;
     $('roughBtn').disabled=!(e?.kind==='brush'&&e.points.length>=2)||!!e?.locked;
+    $('aiCompleteBtn').disabled=!(e?.kind==='bezier'&&e.anchors.length>=2)||!!e?.locked;
     $('closeBtn').disabled=!(e?.kind==='bezier'&&e.anchors.length>=3&&!e.closed)||!!e?.locked;
     $('deleteBtn').disabled=!e||e.locked;
     $('finishBtn').disabled=tool!=='bezier';
@@ -1049,6 +1121,134 @@
     status(newItems.length+'個のAIパーツを追加しました！ Undoでまとめて戻せます');
   };
 
+
+  // Phase 3: local mirror, plus strict copy/paste AI continuation and gap fill.
+  // All proposals are isolated from the document until explicitly confirmed.
+  const aiCompleteDialog=$('aiCompleteDialog');
+  const aiCompletePreviewDialog=$('aiCompletePreviewDialog');
+  const aiCompleteText=$('aiCompleteText');
+  let aiCompleteTargetId=null,aiCompleteMode='prompt';
+
+  function updateAICompleteMode() {
+    const operation=$('aiCompleteOperation').value;
+    const mirroring=operation==='mirrorBezier';
+    const paste=aiCompleteMode==='paste'&&!mirroring;
+    $('aiCompleteAxisRow').hidden=!mirroring;
+    aiCompleteText.hidden=mirroring;
+    $('aiCompleteCopyBtn').hidden=paste||mirroring;
+    $('aiCompletePasteModeBtn').hidden=paste||mirroring;
+    $('aiCompleteBackBtn').hidden=!paste;
+    $('aiCompletePreviewBtn').hidden=!paste&&!mirroring;
+    $('aiCompletePreviewBtn').textContent=mirroring?'👁 左右反転をプレビュー':'👁 JSONをプレビュー';
+    $('aiCompleteHelp').textContent=mirroring
+      ? '選択中の図形をX軸位置で左右反転して、新しいパーツとして追加します。ChatGPTへの送信は不要です。'
+      : paste
+      ? 'ChatGPTの補完JSONを貼り付けてからプレビューしてください。'
+      : '依頼文をChatGPTへ貼り付け、補完JSONを受け取ってください。下絵は必要なら別途添付します。';
+    try {
+      aiCompleteText.value=mirroring?'':paste?'':window.YubiAIComplete.createHandoff(
+        doc,aiCompleteTargetId,operation
+      );
+      $('aiCompleteCopyBtn').disabled=false;
+      $('aiCompletePreviewBtn').disabled=false;
+    }catch(error){
+      aiCompleteText.value='';
+      $('aiCompleteHelp').textContent=error.message;
+      $('aiCompleteCopyBtn').disabled=true;
+      $('aiCompletePreviewBtn').disabled=true;
+    }
+  }
+  $('aiCompleteBtn').onclick=()=>{
+    const e=selected();
+    if(!e || e.kind!=='bezier' || e.locked)return;
+    if(!window.YubiAIComplete?.createHandoff){
+      status('AI半自動補完を読み込めませんでした。再読み込みしてください');return;
+    }
+    aiCompleteTargetId=e.id;aiCompleteMode='prompt';
+    $('aiCompleteOperation').value=e.closed?'mirrorBezier':'extendBezier';
+    $('aiCompleteTarget').textContent='選択中：'+e.name;
+    $('aiCompleteAxis').value='400';$('aiCompleteAxisValue').textContent='400';
+    updateAICompleteMode();
+    aiCompleteDialog.showModal();
+  };
+  $('aiCompleteOperation').onchange=()=>{
+    aiCompleteMode='prompt';updateAICompleteMode();
+  };
+  $('aiCompleteAxis').oninput=()=>{
+    $('aiCompleteAxisValue').textContent=$('aiCompleteAxis').value;
+  };
+  $('aiCompleteCloseBtn').onclick=()=>aiCompleteDialog.close();
+  $('aiCompleteBackBtn').onclick=()=>{
+    aiCompleteMode='prompt';updateAICompleteMode();
+  };
+  $('aiCompletePasteModeBtn').onclick=()=>{
+    aiCompleteMode='paste';updateAICompleteMode();
+  };
+  $('aiCompleteCopyBtn').onclick=async()=>{
+    try{
+      await navigator.clipboard.writeText(aiCompleteText.value);
+      aiCompleteDialog.close();status('補完依頼文をコピーしました！ ChatGPTへ貼り付けてね');
+    }catch{
+      aiCompleteText.focus();aiCompleteText.select();
+      status('依頼文を選択しました。手動コピーでChatGPTへ送ってね');
+    }
+  };
+  $('aiCompletePreviewBtn').onclick=()=>{
+    try {
+      const operation=$('aiCompleteOperation').value;
+      if(operation!=='mirrorBezier'&&aiCompleteMode!=='paste')return;
+      const proposal=operation==='mirrorBezier'
+        ? window.YubiAIComplete.mirrorProposal(
+          doc,aiCompleteTargetId,Number($('aiCompleteAxis').value))
+        : window.YubiAIComplete.buildProposal(doc,aiCompleteText.value,aiCompleteTargetId);
+      if(proposal.operation!==operation)throw new Error('選択した補完操作とJSONの操作が一致しません');
+      aiCompletePreview=proposal;
+      $('aiCompleteSummary').textContent=proposal.description+'：'+proposal.candidate.name;
+      aiCompleteDialog.close();
+      aiCompletePreviewDialog.showModal();
+      render();
+      status('補完結果をプレビュー中です（まだ確定していません）');
+    }catch(error){
+      const msg='補完できません：'+error.message;
+      $('aiCompleteHelp').textContent=msg;status(msg);
+    }
+  };
+  $('aiCompleteDiscardBtn').onclick=()=>{
+    aiCompletePreview=null;aiCompletePreviewDialog.close();render();
+    status('補完を破棄しました。元のパーツは変わりません');
+  };
+  aiCompletePreviewDialog.addEventListener('close',()=>{
+    if(aiCompletePreview){aiCompletePreview=null;render();}
+  });
+  $('aiCompleteConfirmBtn').onclick=()=>{
+    if(!aiCompletePreview)return;
+    const p=aiCompletePreview;
+    const index=doc.elements.findIndex(e=>e.id===p.elementId);
+    const original=doc.elements[index];
+    if(doc.documentId!==p.documentId||doc.revision!==p.expectedRevision
+      ||!original||original.locked
+      ||window.YubiAIPatch.elementFingerprint(original)!==p.baseElementHash
+      ||(p.operation==='mirrorBezier' && doc.elements.length>=1500)){
+      aiCompletePreview=null;aiCompletePreviewDialog.close();render();
+      status('対象パーツが変わりました。補完を作り直してください');return;
+    }
+    const before=snapshot();
+    if(p.operation==='mirrorBezier'){
+      let newId=uid();
+      while(doc.elements.some(e=>e.id===newId))newId=uid();
+      doc.elements.push({...copy(p.candidate),id:newId,locked:false});
+      selection=newId;
+    }else{
+      // Continuation and gap filling replace only the chosen element.
+      doc.elements[index]=copy(p.candidate);
+      selection=p.elementId;
+    }
+    activeBezier=null;tool='select';
+    aiCompletePreview=null;aiCompletePreviewDialog.close();
+    commit(before);
+    status('半自動補完を確定しました！ 戻すで取り消せます');
+  };
+
   // Phone-only AI handoff: ChatGPT returns an exact one-element JSON patch.
   // No account token, third-party server, or uploaded artwork is required.
   const aiDialog=$('aiDialog'),aiText=$('aiText'),aiPartSelect=$('aiPartSelect');
@@ -1164,10 +1364,10 @@
   // confirmation, and incoming events never interrupt a brush gesture.
   sync=window.YubiSync?.createController({
     getDoc:()=>copy(doc),
-    isBusy:()=>Boolean(gesture||pinch||pointers.size||roughPreview||aiNewPreview||aiCreateDialog.open),
+    isBusy:()=>Boolean(gesture||pinch||pointers.size||roughPreview||aiNewPreview||aiCreateDialog.open||aiCompleteDialog.open||aiCompletePreview),
     status,
     replaceDoc:remote=>{
-      if(gesture||pinch||pointers.size||roughPreview||aiNewPreview||aiCreateDialog.open||!valid(remote))return false;
+      if(gesture||pinch||pointers.size||roughPreview||aiNewPreview||aiCreateDialog.open||aiCompleteDialog.open||aiCompletePreview||!valid(remote))return false;
       doc=copy(remote);
       selection=doc.elements[0]?.id||null;
       activeBezier=null;
