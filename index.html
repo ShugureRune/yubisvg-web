@@ -99,7 +99,7 @@
   <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
     <h2 id="aiTitle">AIとパーツを編集</h2>
     <p id="aiHelp"></p>
-    <textarea id="aiText" spellcheck="false" aria-label="AI用のテキスト"></textarea>
+    <textarea id="aiText" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="AI用のテキスト"></textarea>
     <div class="actions">
       <button id="aiCloseBtn">閉じる</button>
       <button id="aiClipboardBtn">文章をコピー</button>
@@ -493,7 +493,7 @@
   };
   $('aiPasteBtn').onclick=()=>{
     $('aiTitle').textContent='ChatGPTの修正JSONを貼り付け';
-    $('aiHelp').textContent='ChatGPTが返したJSONを貼ると、対象パーツだけを検証して修正します。違うパーツや古い版は拒否します。';
+    $('aiHelp').textContent='ChatGPTのコードブロックの「コピー」から貼り付けてね。スマホの曲がった引用符にも対応します。違うパーツや古い版は拒否します。';
     aiText.value='';
     $('aiClipboardBtn').hidden=true;$('aiApplyBtn').hidden=false;
     aiDialog.showModal();
