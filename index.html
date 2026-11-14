@@ -37,7 +37,10 @@
     .layer-row button:last-child { width:45px; padding:0 }
     .layer-row .selected { background:#574ea1; border-color:#b4aaff }
     #status { min-height:29px; padding:6px 12px calc(env(safe-area-inset-bottom) + 6px); color:#bbbdd1; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-    #fileOpen { display:none }
+    #fileOpen, #refFile { display:none }
+    #refOptions button:disabled { opacity:.4 }
+    #refOptions .value { min-width:3ch; text-align:right }
+    #refOptions label { font-size:12px }
     [hidden] { display:none !important }
     #aiDialog { width:min(94vw,600px); max-height:88dvh; background:#1e2133; color:#f8f8ff;
       border:1px solid #7970c5; border-radius:18px; padding:18px; box-shadow:0 10px 80px #000b }
@@ -55,7 +58,7 @@
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.4.3</small></h1><small>スマホだけでAI共同編集</small></div>
+    <div><h1>✦ YubiSVG <small>v0.5</small></h1><small>スマホで下絵トレース＆AI編集</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -68,6 +71,7 @@
     <button data-tool="brush">✎ 指描き</button>
     <button data-tool="bezier">⌁ ベジェ</button>
     <button data-tool="pan">✥ 移動</button>
+    <button data-tool="reference" id="refMoveTool">🖼 下絵移動</button>
     <button id="aiCopyBtn" class="primary">✦ AIに送る</button>
     <button id="aiPasteBtn">⇥ AI修正を貼る</button>
     <button id="undoBtn">↶ 戻す</button>
@@ -84,6 +88,14 @@
     <button id="saveProjectBtn">編集データ保存</button>
     <button id="openProjectBtn">編集データを開く</button>
   </div>
+  <div class="line" id="refOptions" aria-label="下絵の操作">
+    <button id="refAddBtn" class="primary">🖼 下絵読み込み</button>
+    <label>透明度 <input id="refOpacity" type="range" min="0" max="100" value="45" aria-label="下絵の透明度"><span class="value" id="refOpacityValue">45%</span></label>
+    <label>サイズ <input id="refScale" type="range" min="25" max="300" value="100" step="5" aria-label="下絵のサイズ"><span class="value" id="refScaleValue">100%</span></label>
+    <button id="refVisibilityBtn">下絵を隠す</button>
+    <button id="refCenterBtn">下絵を中央へ</button>
+    <button id="refRemoveBtn">下絵削除</button>
+  </div>
   <main id="workspace">
     <svg id="canvas" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-label="SVGキャンバス"></svg>
     <div id="zoomtools">
@@ -98,6 +110,7 @@
   </main>
   <div id="status" role="status">読み込み中…</div>
   <input id="fileOpen" type="file" accept=".json,application/json">
+  <input id="refFile" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.png,.jpg,.jpeg,.webp,.heic,.heif" aria-label="下絵画像を選ぶ">
   <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
     <h2 id="aiTitle">AIとパーツを編集</h2>
     <p id="aiHelp"></p>
@@ -109,8 +122,9 @@
       <button id="aiApplyBtn" class="primary" hidden>修正を確認</button>
     </div>
   </dialog>
-<script src="./client/ai-patch-core.js?v=0.4.3"></script>
-<script src="./client/sync-client.js?v=0.4.3"></script>
+<script src="./client/ai-patch-core.js?v=0.5"></script>
+<script src="./client/reference-store.js?v=0.5"></script>
+<script src="./client/sync-client.js?v=0.5"></script>
 <script>
 (() => {
   'use strict';
@@ -140,6 +154,15 @@
   }
   function valid(doc) {
     if (!doc || doc.schemaVersion!==1 || !Array.isArray(doc.elements) || doc.elements.length>1500) return false;
+    if (doc.reference!==undefined && doc.reference!==null) {
+      const r=doc.reference;
+      if(typeof r.id!=='string'||!/^[A-Za-z0-9_-]{1,120}$/.test(r.id)
+        ||typeof r.name!=='string'||r.name.length>256
+        ||!['x','y','width','height','opacity','scale'].every(key=>isNumber(r[key]))
+        ||r.width<=0||r.height<=0||r.width>100000||r.height>100000
+        ||r.opacity<0||r.opacity>1||r.scale<25||r.scale>300
+        ||typeof r.visible!=='boolean')return false;
+    }
     return doc.elements.every(e => typeof e.id==='string' && typeof e.name==='string'
       && ['brush','bezier'].includes(e.kind) && e.style && typeof e.style.stroke==='string'
       && typeof e.style.fill==='string' && isNumber(e.style.strokeWidth)
@@ -157,6 +180,7 @@
   const pointers=new Map();
   const undo=[],redo=[];
   let sync=null;
+  let refImageData=null,refImageId=null,refLoadingCounter=0;
   const status = message => { $('status').textContent=message; };
   const selected=()=>doc.elements.find(e=>e.id===selection);
   const snapshot=()=>JSON.stringify(doc);
@@ -181,6 +205,7 @@
     doc.revision=oldRev+1;
     selection=doc.elements.some(e=>e.id===selection)?selection:null;
     activeBezier=null; persist(); render();
+    void loadReferenceForDocument();
     sync?.onLocalCommit();
   }
   function makeEl(tag,attributes={}) {
@@ -233,6 +258,15 @@
     canvas.setAttribute('viewBox',[view.x,view.y,view.w,view.h].join(' '));
     const fragment=document.createDocumentFragment();
     fragment.appendChild(makeEl('rect',{x:0,y:0,width:SIZE,height:SIZE,fill:'#fff',stroke:'#dbd6e8','stroke-width':2}));
+    const ref=doc.reference;
+    if(ref?.visible && refImageId===ref.id && refImageData) {
+      fragment.appendChild(makeEl('image',{
+        x:ref.x,y:ref.y,width:ref.width,height:ref.height,
+        opacity:ref.opacity,href:refImageData,
+        preserveAspectRatio:'xMidYMid meet','pointer-events':'none',
+        'data-reference-image':'true'
+      }));
+    }
     for(const e of doc.elements) {
       const group=makeEl('g',{id:e.id});
       if(e.id===selection) {
@@ -262,6 +296,24 @@
       fragment.appendChild(nodes);
     }
     canvas.replaceChildren(fragment);
+    const activeReference=Boolean(doc.reference);
+    $('refOpacity').disabled=!activeReference;
+    $('refScale').disabled=!activeReference;
+    $('refMoveTool').disabled=!activeReference;
+    $('refVisibilityBtn').disabled=!activeReference;
+    $('refCenterBtn').disabled=!activeReference;
+    $('refRemoveBtn').disabled=!activeReference;
+    if(activeReference) {
+      $('refOpacity').value=Math.round(doc.reference.opacity*100);
+      $('refOpacityValue').textContent=Math.round(doc.reference.opacity*100)+'%';
+      $('refScale').value=Math.round(doc.reference.scale);
+      $('refScaleValue').textContent=Math.round(doc.reference.scale)+'%';
+      $('refVisibilityBtn').textContent=doc.reference.visible?'🙈 下絵を隠す':'👁 下絵を表示';
+    } else {
+      $('refOpacityValue').textContent='—';
+      $('refScaleValue').textContent='—';
+      $('refVisibilityBtn').textContent='👁 下絵なし';
+    }
     $('undoBtn').disabled=!undo.length; $('redoBtn').disabled=!redo.length;
     $('smoothBtn').disabled=!(e?.kind==='bezier')||!!e?.locked;
     $('closeBtn').disabled=!(e?.kind==='bezier'&&e.anchors.length>=3&&!e.closed)||!!e?.locked;
@@ -283,7 +335,7 @@
     tool=next;
     if(next!=='bezier') activeBezier=null;
     render();
-    status(({select:'選択：線を動かす／白い点を編集',brush:'指描き：なぞって線を描く',bezier:'ベジェ：タップで点を追加 → パス確定',pan:'移動：ドラッグで表示位置を動かす'})[next]);
+    status(({select:'選択：線を動かす／白い点を編集',brush:'指描き：なぞって線を描く',bezier:'ベジェ：タップで点を追加 → パス確定',pan:'移動：ドラッグで表示位置を動かす',reference:'下絵移動：指でドラッグして下絵の位置を調整'})[next]);
   }
   function addBezier(x,y) {
     const before=snapshot();
@@ -321,7 +373,7 @@
     const cx=(p[0].x+p[1].x)/2,cy=(p[0].y+p[1].y)/2;
     pinch={dist:Math.max(1,Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)),
       view:{...view},focus:screenToWorld(cx,cy)};
-    if(gesture && ['brush','node','move'].includes(gesture.mode)) commit(gesture.before);
+    if(gesture && ['brush','node','move','reference-move'].includes(gesture.mode)) commit(gesture.before);
     gesture=null;
   }
   function updatePinch() {
@@ -344,6 +396,10 @@
     if(pointers.size>2)return;
     const p=screenToWorld(event.clientX,event.clientY);
     if(tool==='pan'){gesture={mode:'pan',pointerId:event.pointerId,last:{x:event.clientX,y:event.clientY}};return;}
+    if(tool==='reference'){
+      if(doc.reference)gesture={mode:'reference-move',pointerId:event.pointerId,last:p,before:snapshot()};
+      return;
+    }
     const node=event.target.closest('[data-node-kind]');
     const e=selected();
     if(tool==='select' && node && e && !e.locked && e.kind==='bezier'){
@@ -381,9 +437,15 @@
       g.last={x:event.clientX,y:event.clientY};render();return;
     }
     const p=screenToWorld(event.clientX,event.clientY);
+    const dx=p.x-g.last.x,dy=p.y-g.last.y;
+    if(g.mode==='reference-move') {
+      if(!doc.reference)return;
+      doc.reference.x=round(doc.reference.x+dx);
+      doc.reference.y=round(doc.reference.y+dy);
+      g.last=p;render();return;
+    }
     const item=doc.elements.find(e=>e.id===g.id);
     if(!item)return;
-    const dx=p.x-g.last.x,dy=p.y-g.last.y;
     if(g.mode==='brush') {
       if(Math.hypot(dx,dy)<Math.max(1,3/svgScale()))return;
       item.points.push(point(p.x,p.y));
@@ -402,7 +464,7 @@
     pointers.delete(event.pointerId);
     if(pinch){if(pointers.size<2)pinch=null;return;}
     if(gesture?.pointerId===event.pointerId) {
-      if(['brush','move','node'].includes(gesture.mode))commit(gesture.before);
+      if(['brush','move','node','reference-move'].includes(gesture.mode))commit(gesture.before);
       gesture=null;
     }
   }
@@ -455,7 +517,8 @@
   $('closeLayers').onclick=()=>$('layers').classList.remove('open');
   $('newBtn').onclick=()=>{
     if(!confirm('今の絵を消して新規作成しますか？（Undoで戻せます）'))return;
-    const before=snapshot();doc.elements=[];selection=null;activeBezier=null;commit(before);
+    const before=snapshot();doc.elements=[];delete doc.reference;selection=null;activeBezier=null;commit(before);
+    void loadReferenceForDocument();
   };
   function download(filename,text,mime){
     const blob=new Blob([text],{type:mime}),url=URL.createObjectURL(blob);
@@ -476,10 +539,110 @@
   $('exportBtn').onclick=()=>{
     download('drawing.svg',exportSVG(),'image/svg+xml;charset=utf-8');status('SVGを保存しました');
   };
-  $('saveProjectBtn').onclick=()=>{
-    download('drawing.yubisvg.json',JSON.stringify(doc,null,2),'application/json;charset=utf-8');
-    status('編集データを保存しました（再編集用）');
+  $('saveProjectBtn').onclick=async()=>{
+    try {
+      const file=copy(doc);
+      if(file.reference) {
+        const image=await window.YubiReference.load(file.reference.id);
+        if(!image)throw new Error('下絵の画像データがありません。下絵を再読み込みしてください');
+        file.referenceImageData=image;
+      }
+      download('drawing.yubisvg.json',JSON.stringify(file,null,2),'application/json;charset=utf-8');
+      status('編集データを保存しました（下絵画像も含みます）');
+    }catch(error){status('保存できません：'+error.message);alert(error.message);}
   };
+  async function loadReferenceForDocument() {
+    const key=doc.reference?.id||null;
+    const stamp=++refLoadingCounter;
+    if(!key) { refImageId=null;refImageData=null;render();return; }
+    if(refImageId===key && refImageData) {render();return;}
+    try {
+      const data=await window.YubiReference.load(key);
+      if(stamp!==refLoadingCounter||doc.reference?.id!==key)return;
+      refImageId=key;refImageData=data;
+      render();
+      if(!data)status('下絵の画像がこの端末にありません。もう一度読み込んでください');
+    }catch(error) {
+      if(stamp!==refLoadingCounter)return;
+      refImageId=null;refImageData=null;
+      status('下絵を読み込めません：'+error.message);
+    }
+  }
+  $('refAddBtn').onclick=()=>$('refFile').click();
+  $('refFile').onchange=async event=>{
+    const file=event.target.files?.[0];
+    if(!file)return;
+    $('refAddBtn').disabled=true;
+    status('下絵を準備中…');
+    try {
+      const image=await window.YubiReference.prepareImage(file);
+      const id=uid();
+      await window.YubiReference.save(id,image.dataUrl);
+      const ratio=Math.min(800/image.width,800/image.height);
+      const width=round(image.width*ratio),height=round(image.height*ratio);
+      const before=snapshot();
+      doc.reference={
+        id,name:file.name.slice(0,256),
+        x:round((800-width)/2),y:round((800-height)/2),
+        width,height,opacity:.45,scale:100,visible:true
+      };
+      refImageId=id;refImageData=image.dataUrl;
+      commit(before);
+      status('下絵を読み込みました！「🖼 下絵移動」で動かせます');
+    }catch(error) {
+      status('下絵を読み込めません：'+error.message);
+      alert(error.message);
+    }finally {
+      $('refAddBtn').disabled=false;
+      event.target.value='';
+    }
+  };
+  let referenceSliderBefore=null;
+  for(const id of ['refOpacity','refScale']){
+    const control=$(id);
+    const markStart=()=>{if(referenceSliderBefore===null)referenceSliderBefore=snapshot();};
+    for(const evt of ['pointerdown','keydown','focus'])control.addEventListener(evt,markStart);
+    control.addEventListener('input',()=>{
+      if(!doc.reference)return;
+      markStart();
+      const ref=doc.reference;
+      if(id==='refOpacity')ref.opacity=Number(control.value)/100;
+      else {
+        const next=Number(control.value),factor=next/ref.scale;
+        const w=ref.width*factor,h=ref.height*factor;
+        ref.x=round(ref.x-(w-ref.width)/2);
+        ref.y=round(ref.y-(h-ref.height)/2);
+        ref.width=round(w);ref.height=round(h);ref.scale=next;
+      }
+      render();
+    });
+    control.addEventListener('change',()=>{
+      if(!doc.reference)return;
+      const before=referenceSliderBefore;
+      referenceSliderBefore=null;
+      if(before!==null)commit(before);
+    });
+  }
+  $('refVisibilityBtn').onclick=()=>{
+    if(!doc.reference)return;
+    const before=snapshot();doc.reference.visible=!doc.reference.visible;commit(before);
+  };
+  $('refCenterBtn').onclick=()=>{
+    if(!doc.reference)return;
+    const before=snapshot();
+    doc.reference.x=round((800-doc.reference.width)/2);
+    doc.reference.y=round((800-doc.reference.height)/2);
+    commit(before);
+  };
+  $('refRemoveBtn').onclick=()=>{
+    if(!doc.reference||!confirm('下絵を削除しますか？（SVGの線は残ります）'))return;
+    const before=snapshot();delete doc.reference;
+    if(tool==='reference')setTool('select');
+    commit(before);
+    void loadReferenceForDocument();
+    status('下絵を削除しました。描いたSVGは残っています');
+  };
+
   // Phone-only AI handoff: ChatGPT returns an exact one-element JSON patch.
   // No account token, third-party server, or uploaded artwork is required.
   const aiDialog=$('aiDialog'),aiText=$('aiText'),aiPartSelect=$('aiPartSelect');
@@ -574,12 +737,22 @@
     try {
       const loaded=JSON.parse(await f.text());
       if(!valid(loaded))throw new Error('形式が違います');
+      if(loaded.referenceImageData!==undefined){
+        if(!loaded.reference || !window.YubiReference.isImageDataUrl(loaded.referenceImageData))
+          throw new Error('下絵画像が不正です');
+        await window.YubiReference.save(loaded.reference.id,loaded.referenceImageData);
+        delete loaded.referenceImageData;
+      }
       const before=snapshot();doc=loaded;selection=doc.elements[0]?.id||null;activeBezier=null;
-      commit(before);status('編集データを読み込みました');
+      refImageId=null;refImageData=null;
+      commit(before);
+      await loadReferenceForDocument();
+      status('編集データを読み込みました'+(doc.reference?'（下絵あり）':'') );
     }catch(err){status('読み込み失敗：'+err.message);}
     event.target.value='';
   };
   render();
+  void loadReferenceForDocument();
   status('サンプルの毛束を編集してみよう！「選択」で白い点をドラッグ');
   // The remote project is opt-in. Replacing a drawing always requires a user
   // confirmation, and incoming events never interrupt a brush gesture.
@@ -593,7 +766,8 @@
       selection=doc.elements[0]?.id||null;
       activeBezier=null;
       undo.length=0;redo.length=0;
-      persist();render();return true;
+      refImageId=null;refImageData=null;
+      persist();render();void loadReferenceForDocument();return true;
     },
     setRevision:revision=>{
       doc.revision=revision;
