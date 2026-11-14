@@ -62,12 +62,23 @@
     #refSharePreview {display:block;max-width:100%;max-height:30dvh;object-fit:contain;
       margin:12px auto;border-radius:10px;background:#fff}
     #refShareStatus {font-weight:600;min-height:1.8em}
+    #roughDialog { position:fixed; top:auto; bottom:calc(env(safe-area-inset-bottom) + 10px);
+      margin:0 auto; width:min(96vw,560px); max-height:55dvh; overflow-y:auto;
+      background:#1e2133; color:#f8f8ff; border:1px solid #64dece;
+      border-radius:16px; padding:14px 16px; box-shadow:0 8px 35px #0009; }
+    #roughDialog::backdrop { background:transparent; }
+    #roughDialog p { margin:7px 0; font-size:13px; color:#d4d9e6; }
+    #roughDialog .controls { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    #roughDialog label { display:flex; gap:6px; align-items:center; font-size:13px; }
+    #roughDialog input[type=range] { width:110px; }
+    #roughDialog input[type=checkbox] { width:19px; height:19px; accent-color:#64dece; }
+    #roughDialog .actions { display:flex; justify-content:flex-end; gap:8px; margin-top:9px; }
     @media (max-width:390px) { header h1 { font-size:15px }; .line button { padding:7px 10px } }
   </style>
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.6.1</small></h1><small>スマホで下絵共有＆AI編集</small></div>
+    <div><h1>✦ YubiSVG <small>v0.7.0</small></h1><small>指描きからベジェに変換</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -90,6 +101,7 @@
     <label>色 <input id="color" type="color" value="#805cdb" aria-label="描画色"></label>
     <label>太さ <input id="width" type="range" min="1" max="24" value="5"><span id="widthValue">5</span></label>
     <button id="smoothBtn">曲線を滑らかに</button>
+    <button id="roughBtn">✦ ラフを図形化</button>
     <button id="closeBtn">閉じる・塗る</button>
     <button id="finishBtn">パス確定</button>
     <button id="deleteBtn">削除</button>
@@ -121,6 +133,19 @@
   <div id="status" role="status">読み込み中…</div>
   <input id="fileOpen" type="file" accept=".json,application/json">
   <input id="refFile" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.png,.jpg,.jpeg,.webp,.heic,.heif" aria-label="下絵画像を選ぶ">
+  <dialog id="roughDialog" aria-label="ラフ線のベジェ図形化プレビュー">
+    <b>✦ ラフをベジェ図形に変換</b>
+    <p>水色の線が変換候補です。確定するまで元のラフや保存データは変わりません。</p>
+    <div class="controls">
+      <label>細かさ <input id="roughDetail" type="range" min="1" max="9" value="5"><span id="roughDetailValue">5</span></label>
+      <label><input id="roughClose" type="checkbox"> 閉じて塗る</label>
+    </div>
+    <p id="roughSummary" role="status"></p>
+    <div class="actions">
+      <button id="roughDiscard">✕ 破棄</button>
+      <button id="roughConfirm" class="primary">✓ 確定</button>
+    </div>
+  </dialog>
   <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
     <h2 id="aiTitle">AIとパーツを編集</h2>
     <p id="aiHelp"></p>
@@ -145,10 +170,11 @@
       <button id="refShareCloseBtn">閉じる</button>
     </div>
   </dialog>
-<script src="./client/ai-patch-core.js?v=0.6.1"></script>
-<script src="./client/reference-store.js?v=0.6.1"></script>
-<script src="./client/reference-share.js?v=0.6.1"></script>
-<script src="./client/sync-client.js?v=0.6.1"></script>
+<script src="./client/rough-to-bezier.js?v=0.7.0"></script>
+<script src="./client/ai-patch-core.js?v=0.7.0"></script>
+<script src="./client/reference-store.js?v=0.7.0"></script>
+<script src="./client/reference-share.js?v=0.7.0"></script>
+<script src="./client/sync-client.js?v=0.7.0"></script>
 <script>
 (() => {
   'use strict';
@@ -204,6 +230,7 @@
   const pointers=new Map();
   const undo=[],redo=[];
   let sync=null;
+  let roughPreview=null;
   let refImageData=null,refImageId=null,refLoadingCounter=0;
   const status = message => { $('status').textContent=message; };
   const selected=()=>doc.elements.find(e=>e.id===selection);
@@ -288,7 +315,9 @@
     'data-reference-image':'true'
   });
   const vectorLayer=makeEl('g',{'data-vector-layer':'true'});
-  canvas.replaceChildren(backgroundNode,vectorLayer);
+  // Preview is an isolated SVG layer, never part of the document/export.
+  const roughPreviewLayer=makeEl('g',{'pointer-events':'none','data-rough-preview':'true'});
+  canvas.replaceChildren(backgroundNode,vectorLayer,roughPreviewLayer);
   let referenceNodeSource=null;
   function updateReferenceNode() {
     const ref=doc.reference;
@@ -322,7 +351,7 @@
     const fragment=document.createDocumentFragment();
     for(const e of doc.elements) {
       const group=makeEl('g',{id:e.id});
-      if(e.id===selection) {
+      if(e.id===selection && !roughPreview) {
         const outline=makeEl('path',{d:pathData(e),stroke:'#f6b73c','stroke-width':e.style.strokeWidth+9,
           opacity:.55,fill:'none','pointer-events':'none'});
         group.appendChild(outline);
@@ -349,6 +378,16 @@
       fragment.appendChild(nodes);
     }
     vectorLayer.replaceChildren(fragment);
+    if (roughPreview?.candidate) {
+      const candidate=roughPreview.candidate, d=pathData(candidate);
+      const halo=makeEl('path',{d,fill:'none',stroke:'#fff','stroke-width':candidate.style.strokeWidth+7,
+        opacity:0.85,'stroke-linejoin':'round','stroke-linecap':'round'});
+      const preview=makeEl('path',{d,
+        fill:candidate.closed?candidate.style.fill:'none','fill-opacity':0.25,
+        stroke:'#00bfae','stroke-width':Math.max(3,candidate.style.strokeWidth+1),
+        'stroke-linejoin':'round','stroke-linecap':'round'});
+      roughPreviewLayer.replaceChildren(halo,preview);
+    } else roughPreviewLayer.replaceChildren();
     const activeReference=Boolean(doc.reference);
     $('refOpacity').disabled=!activeReference;
     $('refScale').disabled=!activeReference;
@@ -370,6 +409,7 @@
     }
     $('undoBtn').disabled=!undo.length; $('redoBtn').disabled=!redo.length;
     $('smoothBtn').disabled=!(e?.kind==='bezier')||!!e?.locked;
+    $('roughBtn').disabled=!(e?.kind==='brush'&&e.points.length>=2)||!!e?.locked;
     $('closeBtn').disabled=!(e?.kind==='bezier'&&e.anchors.length>=3&&!e.closed)||!!e?.locked;
     $('deleteBtn').disabled=!e||e.locked;
     $('finishBtn').disabled=tool!=='bezier';
@@ -536,6 +576,76 @@
   $('zoomOut').onclick=()=>zoomCenter(1.3333);
   $('zoomReset').onclick=()=>{view={x:0,y:0,w:800,h:800};render();};
   $('finishBtn').onclick=()=>{activeBezier=null;setTool('select');status('パスを確定しました。選択モードで点を動かせます');};
+  // Preview is modal so the underlying canvas and document cannot change
+  // between the proposed conversion and an explicit confirmation.
+  const roughDialog=$('roughDialog');
+  function rebuildRoughPreview() {
+    if(!roughPreview)return;
+    try {
+      const original=doc.elements.find(e=>e.id===roughPreview.id);
+      if(!original||original.kind!=='brush'||original.locked)throw new Error('元のラフ線が見つかりません');
+      const closed=$('roughClose').checked;
+      const anchors=window.YubiRoughCurve.convert(original.points,{
+        detail:Number($('roughDetail').value),closed
+      });
+      roughPreview.candidate={
+        id:original.id,name:original.name.replace(/^指描き/,'ベジェ'),
+        kind:'bezier',anchors,closed,locked:false,
+        style:{...original.style,fill:closed?original.style.stroke:'none'}
+      };
+      $('roughSummary').textContent='制御点 '+anchors.length+'個（元のラフ '+original.points.length+'点）';
+      $('roughConfirm').disabled=false;
+    }catch(error){
+      roughPreview.candidate=null;
+      $('roughSummary').textContent='変換できません：'+error.message;
+      $('roughConfirm').disabled=true;
+    }
+    $('roughDetailValue').textContent=$('roughDetail').value;
+    render();
+  }
+  $('roughBtn').onclick=()=>{
+    const e=selected();
+    if(!e||e.kind!=='brush'||e.locked||e.points.length<2)return;
+    if(!window.YubiRoughCurve?.convert){status('図形化機能を読み込めません。ページを更新してください');return;}
+    roughPreview={id:e.id,candidate:null};
+    $('roughDetail').value='5';
+    const endpointGap=Math.hypot(
+      e.points[0][0]-e.points[e.points.length-1][0],
+      e.points[0][1]-e.points[e.points.length-1][1]
+    );
+    let strokeLength=0;
+    for(let i=1;i<e.points.length;i++){
+      strokeLength+=Math.hypot(e.points[i][0]-e.points[i-1][0],e.points[i][1]-e.points[i-1][1]);
+    }
+    $('roughClose').checked=e.points.length>=5
+      &&strokeLength>=Math.max(60,endpointGap*5)
+      &&endpointGap<=Math.max(14,e.style.strokeWidth*3);
+    roughDialog.showModal();
+    rebuildRoughPreview();
+  };
+  $('roughDetail').addEventListener('input',rebuildRoughPreview);
+  $('roughClose').addEventListener('change',rebuildRoughPreview);
+  $('roughDiscard').onclick=()=>{
+    roughPreview=null;roughDialog.close();render();
+    status('図形化を破棄しました。元のラフ線はそのままです');
+  };
+  roughDialog.addEventListener('close',()=>{
+    if(roughPreview){roughPreview=null;render();}
+  });
+  $('roughConfirm').onclick=()=>{
+    if(!roughPreview?.candidate)return;
+    const index=doc.elements.findIndex(e=>e.id===roughPreview.id && e.kind==='brush' && !e.locked);
+    if(index<0){roughDialog.close();return;}
+    const candidate=roughPreview.candidate;
+    const before=snapshot();
+    doc.elements[index]=candidate;
+    selection=candidate.id;
+    activeBezier=null;tool='select';
+    roughPreview=null;
+    roughDialog.close();
+    commit(before);
+    status('ベジェ図形に変換しました！ 白い点とハンドルで調整できます（Undo対応）');
+  };
   $('smoothBtn').onclick=()=>{
     const e=selected();if(!e||e.kind!=='bezier'||e.locked)return;
     const before=snapshot(),a=e.anchors,n=a.length;
