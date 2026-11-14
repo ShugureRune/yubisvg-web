@@ -14,13 +14,23 @@
   // It detects accidental changes to the selected element; it is not a
   // cryptographic integrity check or an authentication mechanism.
   function elementFingerprint(element) {
+    // Equivalent to 64-bit FNV-1a, using 32-bit arithmetic so it also works
+    // in browser environments where BigInt is unavailable or restricted.
     const json=JSON.stringify(element);
-    let hash=0xcbf29ce484222325n;
+    let hi=0xcbf29ce4,lo=0x84222325;
     for(let i=0;i<json.length;i++){
-      hash^=BigInt(json.charCodeAt(i));
-      hash=(hash*0x100000001b3n)&0xffffffffffffffffn;
+      lo=(lo^json.charCodeAt(i))>>>0;
+      const product=lo*0x1b3; // Exactly representable in JS's 53-bit integer range.
+      const nextLo=Math.imul(lo,0x1b3)>>>0;
+      hi=(Math.imul(hi,0x1b3)+Math.imul(lo,0x100)+Math.floor(product/0x100000000))>>>0;
+      lo=nextLo;
     }
-    return hash.toString(16).padStart(16,'0');
+    return hi.toString(16).padStart(8,'0')+lo.toString(16).padStart(8,'0');
+  }
+  function listEditableElements(doc) {
+    if(!doc||!Array.isArray(doc.elements))return [];
+    return doc.elements.filter(e=>e&&!e.locked&&typeof e.id==='string'
+      && typeof e.name==='string').map(e=>({id:e.id,name:e.name}));
   }
   function parsePatch(text) {
     if(typeof text!=='string'||text.length>250000)fail('AI修正データが長すぎます');
@@ -120,5 +130,5 @@
     next.revision=doc.revision+1;
     return {document:next,before,after,description,elementId:patch.elementId};
   }
-  root.YubiAIPatch={parsePatch,createHandoff,applyPatch,elementFingerprint};
+  root.YubiAIPatch={parsePatch,createHandoff,applyPatch,elementFingerprint,listEditableElements};
 })();
