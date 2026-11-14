@@ -44,6 +44,8 @@
     #aiDialog::backdrop { background:#050512b9 }
     #aiDialog h2 { font-size:18px; margin:0 0 8px }
     #aiDialog p { font-size:13px; color:#bbbfd7; margin:6px 0 12px }
+    #aiPartPicker { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:12px; font-size:14px }
+    #aiPartSelect { min-width:0; flex:1; min-height:44px; border:1px solid #77799f; border-radius:12px; background:#111422; color:#f0efff; padding:8px 12px; font:inherit }
     #aiText { width:100%; height:min(45dvh,370px); min-height:160px; border-radius:12px;
       border:1px solid #77799f; background:#111422; color:#f0efff; padding:12px;
       font:12px ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; }
@@ -53,7 +55,7 @@
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.4.2</small></h1><small>スマホだけでAI共同編集</small></div>
+    <div><h1>✦ YubiSVG <small>v0.4.3</small></h1><small>スマホだけでAI共同編集</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -99,6 +101,7 @@
   <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
     <h2 id="aiTitle">AIとパーツを編集</h2>
     <p id="aiHelp"></p>
+    <label id="aiPartPicker">送るパーツ <select id="aiPartSelect" aria-label="ChatGPTに送るパーツを選ぶ"></select></label>
     <textarea id="aiText" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="AI用のテキスト"></textarea>
     <div class="actions">
       <button id="aiCloseBtn">閉じる</button>
@@ -106,8 +109,8 @@
       <button id="aiApplyBtn" class="primary" hidden>修正を確認</button>
     </div>
   </dialog>
-<script src="./client/ai-patch-core.js"></script>
-<script src="./client/sync-client.js"></script>
+<script src="./client/ai-patch-core.js?v=0.4.3"></script>
+<script src="./client/sync-client.js?v=0.4.3"></script>
 <script>
 (() => {
   'use strict';
@@ -479,21 +482,53 @@
   };
   // Phone-only AI handoff: ChatGPT returns an exact one-element JSON patch.
   // No account token, third-party server, or uploaded artwork is required.
-  const aiDialog=$('aiDialog'),aiText=$('aiText');
+  const aiDialog=$('aiDialog'),aiText=$('aiText'),aiPartSelect=$('aiPartSelect');
   $('aiCloseBtn').onclick=()=>aiDialog.close();
-  $('aiCopyBtn').onclick=()=>{
+  function updateAIHandoff() {
     try {
-      const message=window.YubiAIPatch.createHandoff(doc,selection);
-      $('aiTitle').textContent='ChatGPTにこのパーツを送る';
-      $('aiHelp').textContent='文章をコピーしてChatGPTに貼り付け、最後の「希望の修正」に指示を書いてね。';
+      if(!window.YubiAIPatch?.createHandoff)throw new Error('AI編集機能を読み込めませんでした。Safariでページを再読み込みしてください');
+      const id=aiPartSelect.value;
+      if(!id)throw new Error('送れるパーツがありません。先に「指描き」か「ベジェ」で描いてください');
+      const message=window.YubiAIPatch.createHandoff(doc,id);
+      selection=id;
       aiText.value=message;
-      $('aiClipboardBtn').hidden=false;$('aiApplyBtn').hidden=true;
-      aiDialog.showModal();
-    }catch(error){status(error.message);}
+      $('aiHelp').textContent='このパーツの情報をコピーしてChatGPTに貼り付けよう。最後の「希望の修正」に指示を書いてね。';
+      $('aiClipboardBtn').disabled=false;
+      render();
+    } catch(error) {
+      aiText.value='';
+      const message=error?.message||'AI用の文章を作れませんでした';
+      $('aiHelp').textContent=message;
+      $('aiClipboardBtn').disabled=true;
+      status(message);
+    }
+  }
+  aiPartSelect.onchange=updateAIHandoff;
+  $('aiCopyBtn').onclick=()=>{
+    $('aiTitle').textContent='ChatGPTに送るパーツを選ぶ';
+    $('aiPartPicker').hidden=false;
+    $('aiClipboardBtn').hidden=false;
+    $('aiApplyBtn').hidden=true;
+    aiPartSelect.replaceChildren();
+    const unlocked=window.YubiAIPatch?.listEditableElements?.(doc)
+      ||doc.elements.filter(e=>e&&!e.locked);
+    for(const element of unlocked) {
+      const option=document.createElement('option');
+      option.value=element.id;
+      option.textContent=element.name;
+      aiPartSelect.appendChild(option);
+    }
+    // Tapping the canvas background clears selection. The AI button should
+    // still work by offering a picker instead of silently failing.
+    const preferred=unlocked.some(e=>e.id===selection)?selection:unlocked.at(-1)?.id;
+    if(preferred)aiPartSelect.value=preferred;
+    aiDialog.showModal();
+    updateAIHandoff();
   };
   $('aiPasteBtn').onclick=()=>{
     $('aiTitle').textContent='ChatGPTの修正JSONを貼り付け';
     $('aiHelp').textContent='ChatGPTのコードブロックからコピーしてね。曲がった引用符にも対応！別パーツの編集で版番号が進んだ場合は安全を確認して適用します。対象パーツ自体が変わった場合は再コピーが必要です。';
+    $('aiPartPicker').hidden=true;
     aiText.value='';
     $('aiClipboardBtn').hidden=true;$('aiApplyBtn').hidden=false;
     aiDialog.showModal();
