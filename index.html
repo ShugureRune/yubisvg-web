@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#161824">
+  <title>YubiSVG — 指で描くSVGエディター</title>
+  <style>
+    :root { color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#161824; color:#f5f4ff }
+    * { box-sizing:border-box }
+    html,body { width:100%; height:100%; margin:0; overscroll-behavior:none }
+    body { display:flex; flex-direction:column; height:100dvh; min-height:360px }
+    header { padding:calc(env(safe-area-inset-top) + 9px) 12px 8px; display:flex; align-items:center; gap:8px; justify-content:space-between; flex-wrap:wrap }
+    h1 { font-size:17px; margin:0; letter-spacing:.02em }
+    small { color:#a4a8bc; font-size:11px }
+    button, input { font:inherit }
+    button { border:1px solid #464a61; background:#292c3e; color:white; border-radius:13px; min-height:44px; padding:7px 12px; cursor:pointer; touch-action:manipulation }
+    button:focus-visible, input:focus-visible { outline:2px solid #b1a1ff; outline-offset:2px }
+    button:disabled { opacity:.35; cursor:default }
+    button.active { background:#6856c8; border-color:#a99cf7 }
+    button.primary { background:#705dd1; border-color:#9586e4 }
+    #syncIndicator { font-size:11px; color:#c9d3f9; max-width:95px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .line { display:flex; align-items:center; gap:7px; padding:0 10px 8px; overflow-x:auto; flex-shrink:0; scrollbar-width:none }
+    .line::-webkit-scrollbar { display:none }
+    .line button { flex:0 0 auto; font-size:14px; white-space:nowrap }
+    .line label { display:flex; align-items:center; gap:7px; white-space:nowrap; font-size:13px; color:#c7c8d7 }
+    input[type=color] { height:42px; width:44px; border:2px solid #54576d; border-radius:12px; background:transparent; padding:2px; flex:0 0 auto }
+    input[type=range] { width:86px; accent-color:#a398ff }
+    #workspace { min-height:0; flex:1; position:relative; background:#343748; display:flex; align-items:center; justify-content:center; overflow:hidden }
+    #canvas { width:100%; height:100%; display:block; touch-action:none; user-select:none; -webkit-user-select:none }
+    #zoomtools { position:absolute; right:10px; bottom:12px; display:flex; flex-direction:column; gap:7px }
+    #zoomtools button { width:48px; font-size:20px; background:#202334df }
+    #layers { position:absolute; top:8px; left:8px; bottom:8px; width:min(280px,82vw); background:#1c1f2cf5; border:1px solid #4b4f69; border-radius:16px; padding:12px; display:none; overflow:auto; box-shadow:0 12px 30px #0008 }
+    #layers.open { display:block }
+    .layer-row { display:flex; gap:5px; margin-top:8px }
+    .layer-row button:first-child { flex:1; min-width:0; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .layer-row button:last-child { width:45px; padding:0 }
+    .layer-row .selected { background:#574ea1; border-color:#b4aaff }
+    #status { min-height:29px; padding:6px 12px calc(env(safe-area-inset-bottom) + 6px); color:#bbbdd1; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    #fileOpen { display:none }
+    [hidden] { display:none !important }
+    #aiDialog { width:min(94vw,600px); max-height:88dvh; background:#1e2133; color:#f8f8ff;
+      border:1px solid #7970c5; border-radius:18px; padding:18px; box-shadow:0 10px 80px #000b }
+    #aiDialog::backdrop { background:#050512b9 }
+    #aiDialog h2 { font-size:18px; margin:0 0 8px }
+    #aiDialog p { font-size:13px; color:#bbbfd7; margin:6px 0 12px }
+    #aiText { width:100%; height:min(45dvh,370px); min-height:160px; border-radius:12px;
+      border:1px solid #77799f; background:#111422; color:#f0efff; padding:12px;
+      font:12px ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; }
+    #aiDialog .actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; margin-top:10px }
+    @media (max-width:390px) { header h1 { font-size:15px }; .line button { padding:7px 10px } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>✦ YubiSVG <small>v0.4</small></h1><small>スマホだけでAI共同編集</small></div>
+    <div style="display:flex;gap:6px">
+      <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
+      <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
+      <button id="layersBtn" aria-label="レイヤーを開く">☷ レイヤー</button>
+      <button id="exportBtn" class="primary">SVG保存</button>
+    </div>
+  </header>
+  <nav class="line" aria-label="描画ツール">
+    <button data-tool="select" class="active">↖ 選択</button>
+    <button data-tool="brush">✎ 指描き</button>
+    <button data-tool="bezier">⌁ ベジェ</button>
+    <button data-tool="pan">✥ 移動</button>
+    <button id="aiCopyBtn" class="primary">✦ AIに送る</button>
+    <button id="aiPasteBtn">⇥ AI修正を貼る</button>
+    <button id="undoBtn">↶ 戻す</button>
+    <button id="redoBtn">↷ やり直す</button>
+  </nav>
+  <div class="line">
+    <label>色 <input id="color" type="color" value="#805cdb" aria-label="描画色"></label>
+    <label>太さ <input id="width" type="range" min="1" max="24" value="5"><span id="widthValue">5</span></label>
+    <button id="smoothBtn">曲線を滑らかに</button>
+    <button id="closeBtn">閉じる・塗る</button>
+    <button id="finishBtn">パス確定</button>
+    <button id="deleteBtn">削除</button>
+    <button id="newBtn">新規</button>
+    <button id="saveProjectBtn">編集データ保存</button>
+    <button id="openProjectBtn">編集データを開く</button>
+  </div>
+  <main id="workspace">
+    <svg id="canvas" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-label="SVGキャンバス"></svg>
+    <div id="zoomtools">
+      <button id="zoomIn" aria-label="拡大">＋</button>
+      <button id="zoomOut" aria-label="縮小">－</button>
+      <button id="zoomReset" aria-label="ズームを戻す" style="font-size:12px">全体</button>
+    </div>
+    <aside id="layers" aria-label="レイヤー一覧">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b>レイヤー</b><button id="closeLayers" aria-label="閉じる">✕</button></div>
+      <div id="layerList"></div>
+    </aside>
+  </main>
+  <div id="status" role="status">読み込み中…</div>
+  <input id="fileOpen" type="file" accept=".json,application/json">
+  <dialog id="aiDialog" aria-label="ChatGPTにパーツデータを渡す">
+    <h2 id="aiTitle">AIとパーツを編集</h2>
+    <p id="aiHelp"></p>
+    <textarea id="aiText" spellcheck="false" aria-label="AI用のテキスト"></textarea>
+    <div class="actions">
+      <button id="aiCloseBtn">閉じる</button>
+      <button id="aiClipboardBtn">文章をコピー</button>
+      <button id="aiApplyBtn" class="primary" hidden>修正を確認</button>
+    </div>
+  </dialog>
+<script src="./client/ai-patch-core.js"></script>
+<script src="./client/sync-client.js"></script>
+<script>
+(() => {
+  'use strict';
+  const NS = 'http://www.w3.org/2000/svg';
+  const SIZE = 800;
+  const KEY = 'yubisvg-project-v1';
+  const $ = id => document.getElementById(id);
+  const canvas = $('canvas');
+  let idCount = 0;
+  const uid = () => 'part-' + Date.now().toString(36) + '-' + (++idCount);
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const round = n => Math.round(n * 10) / 10;
+  const isNumber = n => Number.isFinite(n);
+  const point = (x,y) => [round(x),round(y)];
+  const anchor = (x,y) => ({x:round(x),y:round(y),in:point(x,y),out:point(x,y)});
+  function example() {
+    return {schemaVersion:1,documentId:'icon-demo',revision:0,elements:[{
+      id:uid(),name:'サンプル：紫の毛束',kind:'bezier',closed:true,locked:false,
+      anchors:[
+        {x:130,y:270,in:[130,270],out:[230,190]},
+        {x:580,y:280,in:[420,230],out:[610,290]},
+        {x:665,y:400,in:[665,400],out:[665,400]},
+        {x:310,y:470,in:[510,430],out:[220,485]}
+      ],
+      style:{stroke:'#52348c',fill:'#ae91eb',strokeWidth:4}
+    }]};
+  }
+  function valid(doc) {
+    if (!doc || doc.schemaVersion!==1 || !Array.isArray(doc.elements) || doc.elements.length>1500) return false;
+    return doc.elements.every(e => typeof e.id==='string' && typeof e.name==='string'
+      && ['brush','bezier'].includes(e.kind) && e.style && typeof e.style.stroke==='string'
+      && typeof e.style.fill==='string' && isNumber(e.style.strokeWidth)
+      && (e.kind==='brush' ? Array.isArray(e.points) && e.points.length<=30000 && e.points.every(p=>Array.isArray(p)&&p.length===2&&p.every(isNumber))
+      : Array.isArray(e.anchors)&&e.anchors.length<=10000&&e.anchors.every(a=>isNumber(a.x)&&isNumber(a.y)
+        && ['in','out'].every(k=>Array.isArray(a[k])&&a[k].length===2&&a[k].every(isNumber)))));
+  }
+  let doc;
+  try { const stored=JSON.parse(localStorage.getItem(KEY)); doc=valid(stored)?stored:example(); }
+  catch { doc=example(); }
+  let selection=doc.elements[0]?.id || null;
+  let tool='select', color='#805cdb', strokeWidth=5, activeBezier=null;
+  let view={x:0,y:0,w:800,h:800};
+  let gesture=null, pinch=null;
+  const pointers=new Map();
+  const undo=[],redo=[];
+  let sync=null;
+  const status = message => { $('status').textContent=message; };
+  const selected=()=>doc.elements.find(e=>e.id===selection);
+  const snapshot=()=>JSON.stringify(doc);
+  function persist() {
+    try { localStorage.setItem(KEY,JSON.stringify(doc)); }
+    catch { status('ブラウザの保存容量不足。編集データを手動保存してね'); }
+  }
+  function commit(before) {
+    if (before!==snapshot()) {
+      undo.push(before); if(undo.length>80) undo.shift();
+      redo.length=0; doc.revision=(doc.revision||0)+1;
+      persist();
+      sync?.onLocalCommit();
+    }
+    render();
+  }
+  function historyGo(from,to) {
+    if (!from.length) return;
+    to.push(snapshot());
+    const oldRev=doc.revision||0;
+    doc=JSON.parse(from.pop());
+    doc.revision=oldRev+1;
+    selection=doc.elements.some(e=>e.id===selection)?selection:null;
+    activeBezier=null; persist(); render();
+    sync?.onLocalCommit();
+  }
+  function makeEl(tag,attributes={}) {
+    const el=document.createElementNS(NS,tag);
+    for (const [key,value] of Object.entries(attributes)) el.setAttribute(key,String(value));
+    return el;
+  }
+  function pathData(e) {
+    const fmt=p=>round(p[0])+' '+round(p[1]);
+    if(e.kind==='brush') {
+      const p=e.points;
+      if(!p.length) return '';
+      if(p.length===1) return 'M '+fmt(p[0])+' l 0.01 0.01';
+      let d='M '+fmt(p[0]);
+      for(let i=0;i<p.length-1;i++) {
+        const a=p[Math.max(0,i-1)],b=p[i],c=p[i+1],f=p[Math.min(p.length-1,i+2)];
+        d+=' C '+fmt([b[0]+(c[0]-a[0])/6,b[1]+(c[1]-a[1])/6])
+          +' '+fmt([c[0]-(f[0]-b[0])/6,c[1]-(f[1]-b[1])/6])+' '+fmt(c);
+      }
+      return d;
+    }
+    const a=e.anchors;
+    if(!a.length) return '';
+    let d='M '+round(a[0].x)+' '+round(a[0].y);
+    for(let i=1;i<a.length;i++)
+      d+=' C '+fmt(a[i-1].out)+' '+fmt(a[i].in)+' '+round(a[i].x)+' '+round(a[i].y);
+    if(e.closed && a.length>2) d+=' C '+fmt(a[a.length-1].out)+' '+fmt(a[0].in)+' '+round(a[0].x)+' '+round(a[0].y)+' Z';
+    return d;
+  }
+  function drawPath(e,parent,editable=false) {
+    const d=pathData(e);
+    const p=makeEl('path',{d,fill:e.kind==='bezier'&&e.closed?e.style.fill:'none',
+      stroke:e.style.stroke,'stroke-width':e.style.strokeWidth,
+      'stroke-linecap':'round','stroke-linejoin':'round'});
+    parent.appendChild(p);
+    if(editable && !e.locked) {
+      const hit=makeEl('path',{d,fill:e.kind==='bezier'&&e.closed?'transparent':'none',
+        stroke:'transparent','stroke-width':Math.max(25,e.style.strokeWidth+18),
+        'stroke-linecap':'round','stroke-linejoin':'round','pointer-events':'visiblePainted','data-shape-id':e.id});
+      parent.appendChild(hit);
+    }
+  }
+  function screenToWorld(x,y) {
+    const p=canvas.createSVGPoint(); p.x=x; p.y=y;
+    const m=canvas.getScreenCTM();
+    if(!m) return {x:0,y:0};
+    return p.matrixTransform(m.inverse());
+  }
+  function render() {
+    canvas.setAttribute('viewBox',[view.x,view.y,view.w,view.h].join(' '));
+    const fragment=document.createDocumentFragment();
+    fragment.appendChild(makeEl('rect',{x:0,y:0,width:SIZE,height:SIZE,fill:'#fff',stroke:'#dbd6e8','stroke-width':2}));
+    for(const e of doc.elements) {
+      const group=makeEl('g',{id:e.id});
+      if(e.id===selection) {
+        const outline=makeEl('path',{d:pathData(e),stroke:'#f6b73c','stroke-width':e.style.strokeWidth+9,
+          opacity:.55,fill:'none','pointer-events':'none'});
+        group.appendChild(outline);
+      }
+      drawPath(e,group,true);
+      fragment.appendChild(group);
+    }
+    const e=selected();
+    if(tool==='select' && e?.kind==='bezier' && !e.locked) {
+      const radius=Math.max(10,Math.min(25,13 * view.w / Math.max(canvas.clientWidth,1)));
+      const nodes=makeEl('g',{'aria-label':'ベジェ編集ポイント'});
+      e.anchors.forEach((a,i)=>{
+        for(const kind of ['in','out']) {
+          const c=a[kind];
+          if(Math.hypot(c[0]-a.x,c[1]-a.y)>1) {
+            nodes.appendChild(makeEl('line',{x1:a.x,y1:a.y,x2:c[0],y2:c[1],stroke:'#4e9ccc','stroke-width':2,'pointer-events':'none'}));
+            nodes.appendChild(makeEl('circle',{cx:c[0],cy:c[1],r:radius*.75,fill:'#d9f4ff',stroke:'#247bb6',
+              'stroke-width':3,'data-node-kind':kind,'data-index':i}));
+          }
+        }
+        nodes.appendChild(makeEl('circle',{cx:a.x,cy:a.y,r:radius,fill:'#fff',stroke:'#5c48cb',
+          'stroke-width':3,'data-node-kind':'anchor','data-index':i}));
+      });
+      fragment.appendChild(nodes);
+    }
+    canvas.replaceChildren(fragment);
+    $('undoBtn').disabled=!undo.length; $('redoBtn').disabled=!redo.length;
+    $('smoothBtn').disabled=!(e?.kind==='bezier')||!!e?.locked;
+    $('closeBtn').disabled=!(e?.kind==='bezier'&&e.anchors.length>=3&&!e.closed)||!!e?.locked;
+    $('deleteBtn').disabled=!e||e.locked;
+    $('finishBtn').disabled=tool!=='bezier';
+    for(const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('active',b.dataset.tool===tool);
+    const list=$('layerList');list.replaceChildren();
+    [...doc.elements].reverse().forEach(item=>{
+      const row=document.createElement('div');row.className='layer-row';
+      const b=document.createElement('button');b.textContent=item.name;b.className=item.id===selection?'selected':'';
+      b.onclick=()=>{selection=item.id;activeBezier=null;tool='select';render();status('選択中：'+item.name);};
+      const lock=document.createElement('button');lock.textContent=item.locked?'🔒':'🔓';
+      lock.setAttribute('aria-label',item.locked?'ロックを解除':'ロックする');
+      lock.onclick=()=>{const before=snapshot();item.locked=!item.locked;commit(before);};
+      row.append(b,lock);list.appendChild(row);
+    });
+  }
+  function setTool(next) {
+    tool=next;
+    if(next!=='bezier') activeBezier=null;
+    render();
+    status(({select:'選択：線を動かす／白い点を編集',brush:'指描き：なぞって線を描く',bezier:'ベジェ：タップで点を追加 → パス確定',pan:'移動：ドラッグで表示位置を動かす'})[next]);
+  }
+  function addBezier(x,y) {
+    const before=snapshot();
+    let e=doc.elements.find(it=>it.id===activeBezier);
+    if(!e || e.locked) {
+      e={id:uid(),name:'ベジェ '+(doc.elements.length+1),kind:'bezier',anchors:[],closed:false,locked:false,
+        style:{stroke:color,fill:'none',strokeWidth}};
+      doc.elements.push(e);activeBezier=e.id;
+    }
+    e.anchors.push(anchor(x,y));
+    selection=e.id;commit(before);
+  }
+  function moveElement(e,dx,dy) {
+    if(e.kind==='brush') e.points.forEach(p=>{p[0]=round(p[0]+dx);p[1]=round(p[1]+dy);});
+    else e.anchors.forEach(a=>{a.x=round(a.x+dx);a.y=round(a.y+dy);
+      for(const k of ['in','out']){a[k][0]=round(a[k][0]+dx);a[k][1]=round(a[k][1]+dy);}});
+  }
+  function svgScale(v=view) {
+    const r=canvas.getBoundingClientRect();
+    return Math.min(r.width/v.w,r.height/v.h)||1;
+  }
+  function zoomAt(factor,clientX,clientY,base=view) {
+    const before=screenToWorld(clientX,clientY);
+    const w=Math.max(100,Math.min(1800,base.w*factor));
+    const h=w;
+    const r=canvas.getBoundingClientRect(), scale=Math.min(r.width/w,r.height/h);
+    const ox=(r.width-w*scale)/2,oy=(r.height-h*scale)/2;
+    view={x:before.x-(clientX-r.left-ox)/scale,y:before.y-(clientY-r.top-oy)/scale,w,h};
+    render();
+  }
+  function zoomCenter(factor) {const r=canvas.getBoundingClientRect();zoomAt(factor,r.left+r.width/2,r.top+r.height/2);}
+  function startPinch() {
+    const p=[...pointers.values()];
+    if(p.length!==2) return;
+    const cx=(p[0].x+p[1].x)/2,cy=(p[0].y+p[1].y)/2;
+    pinch={dist:Math.max(1,Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)),
+      view:{...view},focus:screenToWorld(cx,cy)};
+    if(gesture && ['brush','node','move'].includes(gesture.mode)) commit(gesture.before);
+    gesture=null;
+  }
+  function updatePinch() {
+    const p=[...pointers.values()];
+    if(!pinch||p.length!==2)return;
+    const cx=(p[0].x+p[1].x)/2,cy=(p[0].y+p[1].y)/2;
+    const dist=Math.max(1,Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y));
+    const w=Math.max(100,Math.min(1800,pinch.view.w*pinch.dist/dist));
+    const h=w,r=canvas.getBoundingClientRect();
+    const s=Math.min(r.width/w,r.height/h),ox=(r.width-w*s)/2,oy=(r.height-h*s)/2;
+    view={x:pinch.focus.x-(cx-r.left-ox)/s,y:pinch.focus.y-(cy-r.top-oy)/s,w,h};
+    render();
+  }
+  canvas.addEventListener('pointerdown',event=>{
+    if(event.button!==undefined&&event.button!==0)return;
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+    if(pointers.size===2){startPinch();return;}
+    if(pointers.size>2)return;
+    const p=screenToWorld(event.clientX,event.clientY);
+    if(tool==='pan'){gesture={mode:'pan',pointerId:event.pointerId,last:{x:event.clientX,y:event.clientY}};return;}
+    const node=event.target.closest('[data-node-kind]');
+    const e=selected();
+    if(tool==='select' && node && e && !e.locked && e.kind==='bezier'){
+      gesture={mode:'node',pointerId:event.pointerId,before:snapshot(),id:e.id,
+        kind:node.dataset.nodeKind,index:Number(node.dataset.index),last:p};
+      return;
+    }
+    const hit=event.target.closest('[data-shape-id]');
+    if(tool==='select'){
+      if(hit){
+        selection=hit.dataset.shapeId;
+        const item=selected();
+        if(item&&!item.locked)gesture={mode:'move',pointerId:event.pointerId,before:snapshot(),id:item.id,last:p};
+      } else {selection=null;}
+      render();return;
+    }
+    if(tool==='bezier'){addBezier(p.x,p.y);return;}
+    if(tool==='brush'){
+      const before=snapshot();
+      const item={id:uid(),name:'指描き '+(doc.elements.length+1),kind:'brush',points:[point(p.x,p.y)],
+        locked:false,style:{stroke:color,fill:'none',strokeWidth}};
+      doc.elements.push(item);selection=item.id;activeBezier=null;
+      gesture={mode:'brush',pointerId:event.pointerId,id:item.id,before,last:p};
+      render();
+    }
+  });
+  canvas.addEventListener('pointermove',event=>{
+    if(pointers.has(event.pointerId))pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+    if(pinch){updatePinch();return;}
+    if(!gesture||gesture.pointerId!==event.pointerId)return;
+    const g=gesture;
+    if(g.mode==='pan'){
+      const s=svgScale();
+      view.x-=(event.clientX-g.last.x)/s;view.y-=(event.clientY-g.last.y)/s;
+      g.last={x:event.clientX,y:event.clientY};render();return;
+    }
+    const p=screenToWorld(event.clientX,event.clientY);
+    const item=doc.elements.find(e=>e.id===g.id);
+    if(!item)return;
+    const dx=p.x-g.last.x,dy=p.y-g.last.y;
+    if(g.mode==='brush') {
+      if(Math.hypot(dx,dy)<Math.max(1,3/svgScale()))return;
+      item.points.push(point(p.x,p.y));
+    } else if(g.mode==='move') moveElement(item,dx,dy);
+    else if(g.mode==='node') {
+      const a=item.anchors[g.index];
+      if(!a)return;
+      if(g.kind==='anchor') {
+        a.x=round(a.x+dx);a.y=round(a.y+dy);
+        for(const k of ['in','out']) {a[k][0]=round(a[k][0]+dx);a[k][1]=round(a[k][1]+dy);}
+      } else a[g.kind]=point(p.x,p.y);
+    }
+    g.last=p;render();
+  });
+  function pointerEnd(event) {
+    pointers.delete(event.pointerId);
+    if(pinch){if(pointers.size<2)pinch=null;return;}
+    if(gesture?.pointerId===event.pointerId) {
+      if(['brush','move','node'].includes(gesture.mode))commit(gesture.before);
+      gesture=null;
+    }
+  }
+  canvas.addEventListener('pointerup',pointerEnd);
+  canvas.addEventListener('pointercancel',pointerEnd);
+  canvas.addEventListener('lostpointercapture',pointerEnd);
+  document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
+  $('undoBtn').onclick=()=>historyGo(undo,redo);
+  $('redoBtn').onclick=()=>historyGo(redo,undo);
+  $('zoomIn').onclick=()=>zoomCenter(.75);
+  $('zoomOut').onclick=()=>zoomCenter(1.3333);
+  $('zoomReset').onclick=()=>{view={x:0,y:0,w:800,h:800};render();};
+  $('finishBtn').onclick=()=>{activeBezier=null;setTool('select');status('パスを確定しました。選択モードで点を動かせます');};
+  $('smoothBtn').onclick=()=>{
+    const e=selected();if(!e||e.kind!=='bezier'||e.locked)return;
+    const before=snapshot(),a=e.anchors,n=a.length;
+    if(n<2)return;
+    a.forEach((p,i)=>{
+      const prev=a[i===0?(e.closed?n-1:0):i-1];
+      const next=a[i===n-1?(e.closed?0:n-1):i+1];
+      let tx=(next.x-prev.x)/6,ty=(next.y-prev.y)/6;
+      if(!e.closed && (i===0||i===n-1)){tx/=2;ty/=2;}
+      p.in=point(p.x-tx,p.y-ty);p.out=point(p.x+tx,p.y+ty);
+    });commit(before);status('曲線を滑らかにしました。丸いハンドルも動かせます');
+  };
+  $('closeBtn').onclick=()=>{
+    const e=selected();if(!e||e.kind!=='bezier'||e.anchors.length<3||e.closed||e.locked)return;
+    const before=snapshot();e.closed=true;e.style.fill=color;commit(before);
+    status('閉じた形になりました。SVGの毛束にも使えます');
+  };
+  $('deleteBtn').onclick=()=>{
+    const e=selected();if(!e||e.locked)return;
+    const before=snapshot();doc.elements=doc.elements.filter(it=>it.id!==e.id);
+    selection=doc.elements.at(-1)?.id||null;activeBezier=null;commit(before);
+  };
+  $('color').addEventListener('input',event=>{
+    color=event.target.value;
+    const e=selected();if(!e||e.locked)return;
+    const before=snapshot();
+    if(e.kind==='bezier'&&e.closed)e.style.fill=color;
+    else e.style.stroke=color;
+    commit(before);
+  });
+  $('width').addEventListener('input',event=>{
+    strokeWidth=Number(event.target.value);$('widthValue').textContent=strokeWidth;
+    const e=selected();if(!e||e.locked)return;
+    const before=snapshot();e.style.strokeWidth=strokeWidth;commit(before);
+  });
+  $('layersBtn').onclick=()=>$('layers').classList.toggle('open');
+  $('closeLayers').onclick=()=>$('layers').classList.remove('open');
+  $('newBtn').onclick=()=>{
+    if(!confirm('今の絵を消して新規作成しますか？（Undoで戻せます）'))return;
+    const before=snapshot();doc.elements=[];selection=null;activeBezier=null;commit(before);
+  };
+  function download(filename,text,mime){
+    const blob=new Blob([text],{type:mime}),url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=filename;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),15000);
+  }
+  function exportSVG(){
+    const root=makeEl('svg',{xmlns:NS,viewBox:'0 0 '+SIZE+' '+SIZE,width:SIZE,height:SIZE});
+    for(const e of doc.elements) {
+      const g=makeEl('g',{id:e.id});
+      g.appendChild(makeEl('title'));
+      g.firstChild.textContent=e.name;
+      drawPath(e,g,false);root.appendChild(g);
+    }
+    return '<?xml version="1.0" encoding="UTF-8"?>\n'+new XMLSerializer().serializeToString(root);
+  }
+  $('exportBtn').onclick=()=>{
+    download('drawing.svg',exportSVG(),'image/svg+xml;charset=utf-8');status('SVGを保存しました');
+  };
+  $('saveProjectBtn').onclick=()=>{
+    download('drawing.yubisvg.json',JSON.stringify(doc,null,2),'application/json;charset=utf-8');
+    status('編集データを保存しました（再編集用）');
+  };
+  // Phone-only AI handoff: ChatGPT returns an exact one-element JSON patch.
+  // No account token, third-party server, or uploaded artwork is required.
+  const aiDialog=$('aiDialog'),aiText=$('aiText');
+  $('aiCloseBtn').onclick=()=>aiDialog.close();
+  $('aiCopyBtn').onclick=()=>{
+    try {
+      const message=window.YubiAIPatch.createHandoff(doc,selection);
+      $('aiTitle').textContent='ChatGPTにこのパーツを送る';
+      $('aiHelp').textContent='文章をコピーしてChatGPTに貼り付け、最後の「希望の修正」に指示を書いてね。';
+      aiText.value=message;
+      $('aiClipboardBtn').hidden=false;$('aiApplyBtn').hidden=true;
+      aiDialog.showModal();
+    }catch(error){status(error.message);}
+  };
+  $('aiPasteBtn').onclick=()=>{
+    $('aiTitle').textContent='ChatGPTの修正JSONを貼り付け';
+    $('aiHelp').textContent='ChatGPTが返したJSONを貼ると、対象パーツだけを検証して修正します。違うパーツや古い版は拒否します。';
+    aiText.value='';
+    $('aiClipboardBtn').hidden=true;$('aiApplyBtn').hidden=false;
+    aiDialog.showModal();
+  };
+  $('aiClipboardBtn').onclick=async()=>{
+    try {
+      await navigator.clipboard.writeText(aiText.value);
+      status('コピー成功！ ChatGPTに貼って、変更したい内容を伝えてね');
+      aiDialog.close();
+    }catch {
+      aiText.focus();aiText.select();
+      status('文章を選択しました。「コピー」でChatGPTに貼り付けてね');
+    }
+  };
+  $('aiApplyBtn').onclick=()=>{
+    try {
+      const proposal=window.YubiAIPatch.applyPatch(doc,aiText.value);
+      const summary='対象：'+proposal.before.name+'\\n変更：'+proposal.description+
+        '\\nこのパーツだけ更新します。ほかのパーツは変更しません。適用しますか？';
+      if(!confirm(summary))return;
+      const before=snapshot();
+      doc=proposal.document;
+      // The imported result already increments the revision.
+      doc.revision-=1;
+      selection=proposal.elementId;
+      activeBezier=null;
+      commit(before);
+      aiDialog.close();
+      status('AIの修正を適用しました！ 対象：'+proposal.before.name);
+    }catch(error){status('AI修正を適用できません：'+error.message);alert(error.message);}
+  };
+  // The PC connection controls are shown only if a YubiSVG server is present.
+  // A public static editor remains standalone by default.
+  fetch('./api/health',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{
+    if(data?.service==='yubisvg-live'){
+      $('syncBtn').hidden=false;$('syncIndicator').hidden=false;
+    }
+  }).catch(()=>{});
+  $('openProjectBtn').onclick=()=>$('fileOpen').click();
+  $('fileOpen').onchange=async event=>{
+    const f=event.target.files?.[0];if(!f)return;
+    if(f.size>15*1024*1024){status('15MBを超える編集データは読み込めません');return;}
+    try {
+      const loaded=JSON.parse(await f.text());
+      if(!valid(loaded))throw new Error('形式が違います');
+      const before=snapshot();doc=loaded;selection=doc.elements[0]?.id||null;activeBezier=null;
+      commit(before);status('編集データを読み込みました');
+    }catch(err){status('読み込み失敗：'+err.message);}
+    event.target.value='';
+  };
+  render();
+  status('サンプルの毛束を編集してみよう！「選択」で白い点をドラッグ');
+  // The remote project is opt-in. Replacing a drawing always requires a user
+  // confirmation, and incoming events never interrupt a brush gesture.
+  sync=window.YubiSync?.createController({
+    getDoc:()=>copy(doc),
+    isBusy:()=>Boolean(gesture||pinch||pointers.size),
+    status,
+    replaceDoc:remote=>{
+      if(gesture||pinch||pointers.size||!valid(remote))return false;
+      doc=copy(remote);
+      selection=doc.elements[0]?.id||null;
+      activeBezier=null;
+      undo.length=0;redo.length=0;
+      persist();render();return true;
+    },
+    setRevision:revision=>{
+      doc.revision=revision;
+      persist();render();
+    }
+  });
+})();
+</script>
+</body>
+</html>
