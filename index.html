@@ -609,10 +609,17 @@
     if(!window.YubiRoughCurve?.convert){status('図形化機能を読み込めません。ページを更新してください');return;}
     roughPreview={id:e.id,candidate:null};
     $('roughDetail').value='5';
-    $('roughClose').checked=Math.hypot(
+    const endpointGap=Math.hypot(
       e.points[0][0]-e.points[e.points.length-1][0],
       e.points[0][1]-e.points[e.points.length-1][1]
-    )<=Math.max(14,e.style.strokeWidth*3);
+    );
+    let strokeLength=0;
+    for(let i=1;i<e.points.length;i++){
+      strokeLength+=Math.hypot(e.points[i][0]-e.points[i-1][0],e.points[i][1]-e.points[i-1][1]);
+    }
+    $('roughClose').checked=e.points.length>=5
+      &&strokeLength>=Math.max(60,endpointGap*5)
+      &&endpointGap<=Math.max(14,e.style.strokeWidth*3);
     roughDialog.showModal();
     rebuildRoughPreview();
   };
