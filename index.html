@@ -53,7 +53,7 @@
 </head>
 <body>
   <header>
-    <div><h1>✦ YubiSVG <small>v0.4</small></h1><small>スマホだけでAI共同編集</small></div>
+    <div><h1>✦ YubiSVG <small>v0.4.2</small></h1><small>スマホだけでAI共同編集</small></div>
     <div style="display:flex;gap:6px">
       <button id="syncBtn" aria-label="PCとの同期を接続・切断" hidden>↔ PC接続</button>
       <span id="syncIndicator" aria-live="polite" hidden>オフライン</span>
@@ -493,7 +493,7 @@
   };
   $('aiPasteBtn').onclick=()=>{
     $('aiTitle').textContent='ChatGPTの修正JSONを貼り付け';
-    $('aiHelp').textContent='ChatGPTのコードブロックの「コピー」から貼り付けてね。スマホの曲がった引用符にも対応します。違うパーツや古い版は拒否します。';
+    $('aiHelp').textContent='ChatGPTのコードブロックからコピーしてね。曲がった引用符にも対応！別パーツの編集で版番号が進んだ場合は安全を確認して適用します。対象パーツ自体が変わった場合は再コピーが必要です。';
     aiText.value='';
     $('aiClipboardBtn').hidden=true;$('aiApplyBtn').hidden=false;
     aiDialog.showModal();

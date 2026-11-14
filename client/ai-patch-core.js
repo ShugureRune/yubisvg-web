@@ -10,6 +10,18 @@
   const coordinate=n=>Number.isFinite(n)&&Math.abs(n)<=100000;
   const pair=v=>Array.isArray(v)&&v.length===2&&v.every(coordinate);
   const HEX=/^#[0-9a-fA-F]{6}$/;
+  // Fast stable 64-bit fingerprint for optimistic conflict checks.
+  // It detects accidental changes to the selected element; it is not a
+  // cryptographic integrity check or an authentication mechanism.
+  function elementFingerprint(element) {
+    const json=JSON.stringify(element);
+    let hash=0xcbf29ce484222325n;
+    for(let i=0;i<json.length;i++){
+      hash^=BigInt(json.charCodeAt(i));
+      hash=(hash*0x100000001b3n)&0xffffffffffffffffn;
+    }
+    return hash.toString(16).padStart(16,'0');
+  }
   function parsePatch(text) {
     if(typeof text!=='string'||text.length>250000)fail('AI修正データが長すぎます');
     let source=text.trim();
@@ -34,15 +46,16 @@
     if(element.locked)fail('このパーツはロック中です。解除してからコピーしてください');
     const payload={
       documentId:doc.documentId,expectedRevision:doc.revision,elementId,
-      element:clone(element)
+      baseElementHash:elementFingerprint(element),element:clone(element)
     };
     return [
       'これはYubiSVGのパーツ編集データです。',
       '私が続けて指定する変更だけを、このパーツに施してください。',
-      'パーツID・documentId・expectedRevisionは変更せず、',
+      'パーツID・documentId・expectedRevision・baseElementHashは変更せず、',
+      '返答のJSONにbaseElementHashを必ず含めてください。',
       '返答は次の形式のJSONオブジェクトだけにしてください。',
-      'ベジェの形を直す場合：{ "documentId": "...", "expectedRevision": 0, "elementId": "...", "anchors": [ { "x": 0, "y": 0, "in": [0,0], "out": [0,0] } ] }',
-      '色や線幅を直す場合：{ "documentId": "...", "expectedRevision": 0, "elementId": "...", "style": { "stroke": "#000000" } }',
+      'ベジェの形を直す場合：{ "documentId": "...", "expectedRevision": 0, "elementId": "...", "baseElementHash": "...", "anchors": [ { "x": 0, "y": 0, "in": [0,0], "out": [0,0] } ] }',
+      '色や線幅を直す場合：{ "documentId": "...", "expectedRevision": 0, "elementId": "...", "baseElementHash": "...", "style": { "stroke": "#000000" } }',
       'anchorsとstyleは同時に指定せず、変更対象はこの1パーツのみです。',
       'JSONデータ:',
       JSON.stringify(payload,null,2),
@@ -54,15 +67,28 @@
     const patch=typeof text==='string'?parsePatch(text):text;
     if(!patch||typeof patch!=='object'||Array.isArray(patch))fail('JSONオブジェクトを貼り付けてください');
     const keys=Object.keys(patch);
-    const allowed=new Set(['documentId','expectedRevision','elementId','anchors','style']);
+    const allowed=new Set(['documentId','expectedRevision','elementId','baseElementHash','anchors','style']);
     if(!keys.every(key=>allowed.has(key)))fail('予期しないキーがあります。修正JSONだけ貼り付けてください');
     if(patch.documentId!==doc.documentId)fail('違う作品の修正データです');
-    if(!Number.isSafeInteger(patch.expectedRevision)||patch.expectedRevision!==doc.revision)fail('作品の版番号が違います。パーツデータをもう一度コピーしてください');
+    if(!Number.isSafeInteger(patch.expectedRevision)||patch.expectedRevision<0)fail('作品の版番号が不正です');
     if(typeof patch.elementId!=='string'||!patch.elementId)fail('elementIdがありません');
     const index=doc.elements.findIndex(e=>e.id===patch.elementId);
     if(index<0)fail('対象のパーツが見つかりません');
     const before=doc.elements[index];
     if(before.locked)fail('ロックされたパーツは修正できません');
+    if(patch.expectedRevision!==doc.revision) {
+      // Old patches without a fingerprint deliberately retain the safe
+      // failure behavior. New patches can be applied after unrelated edits.
+      if(patch.expectedRevision>doc.revision
+        || typeof patch.baseElementHash!=='string'
+        || !/^[0-9a-f]{16}$/.test(patch.baseElementHash)
+        || patch.baseElementHash!==elementFingerprint(before)) {
+        fail('作品の版番号が違います（修正データ：'+patch.expectedRevision+'、現在：'+doc.revision+'）。パーツデータをもう一度コピーしてください');
+      }
+    } else if(patch.baseElementHash!==undefined &&
+      patch.baseElementHash!==elementFingerprint(before)) {
+      fail('対象パーツがコピーしたときから変化しています。パーツデータをもう一度コピーしてください');
+    }
     const hasAnchors=Object.hasOwn(patch,'anchors'),hasStyle=Object.hasOwn(patch,'style');
     if(hasAnchors===hasStyle)fail('anchorsかstyleのどちらか一方だけ指定してください');
     const after=clone(before);
@@ -94,5 +120,5 @@
     next.revision=doc.revision+1;
     return {document:next,before,after,description,elementId:patch.elementId};
   }
-  root.YubiAIPatch={parsePatch,createHandoff,applyPatch};
+  root.YubiAIPatch={parsePatch,createHandoff,applyPatch,elementFingerprint};
 })();
