@@ -19,8 +19,13 @@
       const end=source.lastIndexOf(fence);
       if(end>=0)source=source.slice(0,end).trim();
     }
+    // iOS's smart punctuation and rich-text copy can turn JSON quote marks
+    // into typographic characters. Patch strings contain IDs and colors only,
+    // so normalizing these characters is safe; all structural validation
+    // below remains unchanged.
+    source=source.replace(/[\u201c\u201d\u201e\u201f\uff02]/g,'"').replace(/\u00a0/g,' ');
     try {return JSON.parse(source);}
-    catch {fail('JSONが読み取れません。ChatGPTにJSONのみ返してもらってください');}
+    catch {fail('JSONが読み取れません。ChatGPTのコードブロックから「コピー」して貼り付けてください');}
   }
   function createHandoff(doc,elementId) {
     if(!doc||!Array.isArray(doc.elements))fail('編集データが不正です');
